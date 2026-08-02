@@ -5,6 +5,7 @@ Supports configurable student text encoders for knowledge distillation to FLUX.2
   - MiniCPM5-1B (1.08B)
   - Qwen3.5-0.8B (0.8B)
   - Qwen3.5-2B (2.0B)
+  - Qwen3.5-4B (4.0B)
   - LFM2.5-230M (230M)
   - LFM2.5-350M (350M)
   - SmolLM2-135M-Instruct (135M)
@@ -102,6 +103,15 @@ PRESETS: Dict[str, StudentConfig] = {
         default_adapter_dir="adapter_checkpoints/qwen3.5_2b",
         default_lora_dir="lora_checkpoints/qwen3.5_2b",
         description="Qwen3.5-2B (2.0B params, hidden_size=2048, hybrid linear/full attention)",
+    ),
+    "qwen3.5-4b": StudentConfig(
+        name="qwen3.5-4b",
+        student_model_id="Qwen/Qwen3.5-4B",
+        hidden_size=2560,
+        extract_layers=[7, 19, 31],  # 32 layers total, full-attention layers in hybrid architecture
+        default_adapter_dir="adapter_checkpoints/qwen3.5_4b",
+        default_lora_dir="lora_checkpoints/qwen3.5_4b",
+        description="Qwen3.5-4B (4.0B params, hidden_size=2560, hybrid linear/full attention)",
     ),
     "lfm2.5-230m": StudentConfig(
         name="lfm2.5-230m",
