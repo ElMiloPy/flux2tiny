@@ -1,12 +1,8 @@
 # flux2tiny 🚀
 
-**Replace a 4B-parameter text encoder with a 1B (or 0.8B) model — and teach the diffusion model to not notice.**
+**Replace a 4B-parameter text encoder with a compact model — and teach the diffusion model to not notice.**
 
 flux2tiny adapts [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) to use smaller text encoders instead of the default 4B-parameter Qwen3-4B text encoder. Adaptation is done through a **three-stage knowledge distillation pipeline** that progressively transfers the teacher's behavior to the student configuration.
-
-Supported student model configurations:
-- `minicpm-1b` — [MiniCPM5-1B](https://huggingface.co/openbmb/MiniCPM5-1B) (1.08B params, `hidden_size=1536`)
-- `qwen3.5-0.8b` — [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) (0.8B params, `hidden_size=1024`, hybrid attention)
 
 ---
 
@@ -14,10 +10,14 @@ Supported student model configurations:
 
 All scripts in `flux2tiny` accept the `--config` CLI flag to select the student text encoder:
 
-| Preset Name | Model ID | Hidden Size | Layers Extracted | Adapter Size |
-|:------------|:---------|:------------|:-----------------|:-------------|
-| `minicpm-1b` | `openbmb/MiniCPM5-1B` | 1536 | `[5, 12, 19]` | ~11.8M params |
-| `qwen3.5-0.8b` | `Qwen/Qwen3.5-0.8B` | 1024 | `[7, 15, 23]` | ~7.9M params |
+| Preset Name | Model ID | Params | Hidden Size | Layers Extracted | Adapter Size |
+|:------------|:---------|:-------|:------------|:-----------------|:-------------|
+| `minicpm5-1b` | `openbmb/MiniCPM5-1B` | 1.08B | 1536 | `[5, 12, 19]` | ~11.8M params |
+| `qwen3.5-0.8b` | `Qwen/Qwen3.5-0.8B` | 0.8B | 1024 | `[7, 15, 23]` | ~7.9M params |
+| `qwen3.5-2b` | `Qwen/Qwen3.5-2B` | 2.0B | 2048 | `[7, 15, 23]` | ~15.7M params |
+| `lfm2.5-230m` | `LiquidAI/LFM2.5-230M` | 230M | 1024 | `[3, 7, 11]` | ~7.9M params |
+| `lfm2.5-350m` | `LiquidAI/LFM2.5-350M` | 350M | 1024 | `[4, 8, 12]` | ~7.9M params |
+| `smollm2-135m` | `HuggingFaceTB/SmolLM2-135M-Instruct` | 135M | 576 | `[8, 15, 23]` | ~4.4M params |
 
 ---
 
@@ -31,16 +31,19 @@ The full distillation pipeline has **three stages**, each building on the last:
 
 Both text encoders are frozen. For each training caption:
 1. Run it through **Qwen3-4B** (teacher) and extract hidden states from layers `[8, 18, 28]` → concatenate to `[batch, seq_len, 7680]` (3 × 2560)
-2. Run it through **Student Model** (MiniCPM5-1B or Qwen3.5-0.8B) and extract layers
+2. Run it through **Student Model** (MiniCPM, Qwen3.5, LFM2.5, SmolLM2, etc.) and extract 3 layers
 3. Pass student layers through **PerLayerProjection adapter** (3 independent `nn.Linear(student_dim → 2560)` projections, concatenated)
 4. Minimize **MSE loss** between adapter output and teacher target
 
 ```bash
 # Train adapter for MiniCPM5-1B
-python train_adapter.py --config minicpm-1b --num-epochs 5
+python train_adapter.py --config minicpm5-1b --num-epochs 5
 
-# Train adapter for Qwen3.5-0.8B
-python train_adapter.py --config qwen3.5-0.8b --num-epochs 5
+# Train adapter for LFM2.5-230M
+python train_adapter.py --config lfm2.5-230m --num-epochs 5
+
+# Train adapter for SmolLM2-135M
+python train_adapter.py --config smollm2-135m --num-epochs 5
 ```
 
 ### Stage 2 — Synthetic Teacher Latent Generation
@@ -62,16 +65,10 @@ python generate_synthetic_dataset.py \
 
 ```bash
 # Flow Matching LoRA distillation for MiniCPM5-1B
-python train_lora.py \
-    --config minicpm-1b \
-    --synthetic-dir synthetic_sd_15k \
-    --num-epochs 3
+python train_lora.py --config minicpm5-1b --synthetic-dir synthetic_sd_15k --num-epochs 3
 
-# Flow Matching LoRA distillation for Qwen3.5-0.8B
-python train_lora.py \
-    --config qwen3.5-0.8b \
-    --synthetic-dir synthetic_sd_15k \
-    --num-epochs 3
+# Flow Matching LoRA distillation for LFM2.5-230M
+python train_lora.py --config lfm2.5-230m --synthetic-dir synthetic_sd_15k --num-epochs 3
 ```
 
 ---
@@ -81,16 +78,16 @@ python train_lora.py \
 ```
 FLUX.2-klein-4B (Original)              flux2tiny (Adapted)
 ┌──────────────────────┐                ┌──────────────────────────────┐
-│ Qwen3-4B (2560 dim)  │                │ Student Model (1024/1536 dim)│
-│ 36 layers, 4B params │       →→→      │ MiniCPM5-1B or Qwen3.5-0.8B  │
-│ hidden_size = 2560   │                │ 24 layers, ~0.8B-1B params   │
+│ Qwen3-4B (2560 dim)  │                │ Student Model (576-2048 dim) │
+│ 36 layers, 4B params │       →→→      │ MiniCPM, Qwen3.5, LFM, Smol  │
+│ hidden_size = 2560   │                │ 135M - 2.0B params           │
 └──────────┬───────────┘                └──────────────┬───────────────┘
            │ 3 × 2560 = 7680                                   │ 3 × D = 3D
            │                                                   ▼
            │                            ┌──────────────────────────────┐
            │                            │ Projection Adapter           │
            │                            │ 3D → 7680 (3 × 2560)         │
-           │                            │ ~7.9M - 11.8M params         │
+           │                            │ ~4.4M - 15.7M params         │
            │                            └──────────────┬───────────────┘
            ▼                                           ▼
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -126,20 +123,20 @@ conda activate flux2tiny
 Generate images with MiniCPM5-1B:
 ```bash
 python generate.py "A photo of a dog sitting in a lush garden" \
-    --config minicpm-1b --size 512x512 --seed 42
+    --config minicpm5-1b --size 512x512 --seed 42
 ```
 
-Generate images with Qwen3.5-0.8B:
+Generate images with SmolLM2-135M:
 ```bash
 python generate.py "A photo of a dog sitting in a lush garden" \
-    --config qwen3.5-0.8b --size 512x512 --seed 42
+    --config smollm2-135m --size 512x512 --seed 42
 ```
 
 ### 3. Upload Trained Weights to Hugging Face
 
 ```bash
-python upload_to_hub.py --config minicpm-1b --repo-id Emilio407/flux2tiny-weights
-python upload_to_hub.py --config qwen3.5-0.8b --repo-id Emilio407/flux2tiny-qwen3.5-0.8b-weights
+python upload_to_hub.py --config minicpm5-1b --repo-id Emilio407/flux2tiny-weights
+python upload_to_hub.py --config smollm2-135m --repo-id Emilio407/flux2tiny-smollm2-135m-weights
 ```
 
 ---
@@ -148,7 +145,7 @@ python upload_to_hub.py --config qwen3.5-0.8b --repo-id Emilio407/flux2tiny-qwen
 
 ```
 flux2tiny/
-├── config.py                     # Central configuration registry (MiniCPM5-1B, Qwen3.5-0.8B)
+├── config.py                     # Central configuration registry
 ├── adapter.py                    # Projection adapter (PerLayerProjection / ConcatProjection)
 ├── pipeline.py                   # Flux2TinyPipeline — inference wrapper
 ├── generate.py                   # CLI image generation
@@ -178,15 +175,6 @@ flux2tiny/
 
 ---
 
-## Upstream Model Licenses
-
-| Model | License |
-|:------|:--------|
-| [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) | Apache 2.0 |
-| [FLUX.2-small-decoder](https://huggingface.co/black-forest-labs/FLUX.2-small-decoder) | Apache 2.0 |
-| [MiniCPM5-1B](https://huggingface.co/openbmb/MiniCPM5-1B) | Apache 2.0 |
-| [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) | Apache 2.0 |
-
 ## License
 
-This project's source code is released under the [MIT License](LICENSE).
+- Source code released under the [MIT License](LICENSE).

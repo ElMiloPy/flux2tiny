@@ -1,8 +1,13 @@
 """
 flux2tiny — Model Configuration Registry.
 
-Supports configurable student text encoders (e.g., MiniCPM5-1B, Qwen3.5-0.8B)
-for knowledge distillation to FLUX.2-klein-4B.
+Supports configurable student text encoders for knowledge distillation to FLUX.2-klein-4B:
+  - MiniCPM5-1B (1.08B)
+  - Qwen3.5-0.8B (0.8B)
+  - Qwen3.5-2B (2.0B)
+  - LFM2.5-230M (230M)
+  - LFM2.5-350M (350M)
+  - SmolLM2-135M-Instruct (135M)
 """
 
 from dataclasses import dataclass, field
@@ -22,8 +27,8 @@ class StudentConfig:
     teacher_hidden_size: int = 2560
     teacher_extract_layers: List[int] = field(default_factory=lambda: [8, 18, 28])
     vae_model_id: str = "black-forest-labs/FLUX.2-small-decoder"
-    default_adapter_dir: str = "adapter_checkpoints/minicpm5_1b"
-    default_lora_dir: str = "lora_checkpoints/minicpm5_1b"
+    default_adapter_dir: str = "adapter_checkpoints"
+    default_lora_dir: str = "lora_checkpoints"
     description: str = ""
 
     @property
@@ -88,6 +93,51 @@ PRESETS: Dict[str, StudentConfig] = {
         default_adapter_dir="adapter_checkpoints/qwen3.5_0.8b",
         default_lora_dir="lora_checkpoints/qwen3.5_0.8b",
         description="Qwen3.5-0.8B (0.8B params, hidden_size=1024, hybrid linear/full attention)",
+    ),
+    "qwen3.5-2b": StudentConfig(
+        name="qwen3.5-2b",
+        student_model_id="Qwen/Qwen3.5-2B",
+        hidden_size=2048,
+        extract_layers=[7, 15, 23],  # Full-attention layers in hybrid architecture
+        default_adapter_dir="adapter_checkpoints/qwen3.5_2b",
+        default_lora_dir="lora_checkpoints/qwen3.5_2b",
+        description="Qwen3.5-2B (2.0B params, hidden_size=2048, hybrid linear/full attention)",
+    ),
+    "lfm2.5-230m": StudentConfig(
+        name="lfm2.5-230m",
+        student_model_id="LiquidAI/LFM2.5-230M",
+        hidden_size=1024,
+        extract_layers=[3, 7, 11],  # 14 layers total
+        default_adapter_dir="adapter_checkpoints/lfm2.5_230m",
+        default_lora_dir="lora_checkpoints/lfm2.5_230m",
+        description="Liquid AI LFM2.5-230M (230M params, hidden_size=1024)",
+    ),
+    "lfm2.5-350m": StudentConfig(
+        name="lfm2.5-350m",
+        student_model_id="LiquidAI/LFM2.5-350M",
+        hidden_size=1024,
+        extract_layers=[4, 8, 12],  # 16 layers total
+        default_adapter_dir="adapter_checkpoints/lfm2.5_350m",
+        default_lora_dir="lora_checkpoints/lfm2.5_350m",
+        description="Liquid AI LFM2.5-350M (350M params, hidden_size=1024)",
+    ),
+    "smollm2-135m": StudentConfig(
+        name="smollm2-135m",
+        student_model_id="HuggingFaceTB/SmolLM2-135M-Instruct",
+        hidden_size=576,
+        extract_layers=[8, 15, 23],  # 30 layers total
+        default_adapter_dir="adapter_checkpoints/smollm2_135m",
+        default_lora_dir="lora_checkpoints/smollm2_135m",
+        description="SmolLM2-135M-Instruct (135M params, hidden_size=576)",
+    ),
+    "smollm2-135m-instruct": StudentConfig(
+        name="smollm2-135m",
+        student_model_id="HuggingFaceTB/SmolLM2-135M-Instruct",
+        hidden_size=576,
+        extract_layers=[8, 15, 23],  # 30 layers total
+        default_adapter_dir="adapter_checkpoints/smollm2_135m",
+        default_lora_dir="lora_checkpoints/smollm2_135m",
+        description="SmolLM2-135M-Instruct (135M params, hidden_size=576)",
     ),
 }
 
