@@ -7,6 +7,7 @@ for knowledge distillation to FLUX.2-klein-4B.
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Union
+from pathlib import Path
 import argparse
 
 
@@ -21,8 +22,8 @@ class StudentConfig:
     teacher_hidden_size: int = 2560
     teacher_extract_layers: List[int] = field(default_factory=lambda: [8, 18, 28])
     vae_model_id: str = "black-forest-labs/FLUX.2-small-decoder"
-    default_adapter_dir: str = "adapter_checkpoints"
-    default_lora_dir: str = "lora_checkpoints"
+    default_adapter_dir: str = "adapter_checkpoints/minicpm5_1b"
+    default_lora_dir: str = "lora_checkpoints/minicpm5_1b"
     description: str = ""
 
     @property
@@ -36,21 +37,47 @@ class StudentConfig:
         return self.teacher_hidden_size * len(self.teacher_extract_layers)
 
     def get_adapter_path(self, checkpoint: str = "adapter_best.safetensors") -> str:
-        return f"{self.default_adapter_dir}/{checkpoint}"
+        """Get adapter path with fallback to existing directory paths."""
+        p1 = Path(self.default_adapter_dir) / checkpoint
+        if p1.exists():
+            return str(p1)
+        p2 = Path("adapter_checkpoints") / checkpoint
+        if p2.exists():
+            return str(p2)
+        return str(p1)
 
     def get_lora_path(self, checkpoint: str = "final/transformer_lora") -> str:
-        return f"{self.default_lora_dir}/{checkpoint}"
+        """Get LoRA path with fallback to existing directory paths."""
+        p1 = Path(self.default_lora_dir) / checkpoint
+        if p1.exists():
+            return str(p1)
+        p2 = Path("lora_checkpoints_15k") / checkpoint
+        if p2.exists():
+            return str(p2)
+        p3 = Path("lora_checkpoints") / checkpoint
+        if p3.exists():
+            return str(p3)
+        return str(p1)
 
 
 # Pre-defined student model presets
 PRESETS: Dict[str, StudentConfig] = {
-    "minicpm-1b": StudentConfig(
-        name="minicpm-1b",
+    "minicpm5-1b": StudentConfig(
+        name="minicpm5-1b",
         student_model_id="openbmb/MiniCPM5-1B",
         hidden_size=1536,
         extract_layers=[5, 12, 19],
-        default_adapter_dir="adapter_checkpoints/minicpm",
-        default_lora_dir="lora_checkpoints/minicpm",
+        default_adapter_dir="adapter_checkpoints/minicpm5_1b",
+        default_lora_dir="lora_checkpoints/minicpm5_1b",
+        description="MiniCPM5-1B (1.08B params, hidden_size=1536)",
+    ),
+    "minicpm-1b": StudentConfig(
+        name="minicpm5-1b",
+        student_model_id="openbmb/MiniCPM5-1B",
+        hidden_size=1536,
+        extract_layers=[5, 12, 19],
+        default_adapter_dir="adapter_checkpoints/minicpm5_1b",
+        default_lora_dir="lora_checkpoints/minicpm5_1b",
         description="MiniCPM5-1B (1.08B params, hidden_size=1536)",
     ),
     "qwen3.5-0.8b": StudentConfig(
@@ -64,7 +91,7 @@ PRESETS: Dict[str, StudentConfig] = {
     ),
 }
 
-DEFAULT_PRESET = "minicpm-1b"
+DEFAULT_PRESET = "minicpm5-1b"
 
 
 def get_student_config(preset_name: str = DEFAULT_PRESET) -> StudentConfig:
