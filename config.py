@@ -1,18 +1,18 @@
 """
 flux2tiny — Model Configuration Registry.
 
-Loads JSON student model configurations from the `configs/` directory.
+Loads JSON student model configurations directly from `.json` file paths.
 """
 
 import json
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Union
 from pathlib import Path
 import argparse
 
 
 CONFIGS_DIR = Path(__file__).parent / "configs"
-DEFAULT_PRESET = "minicpm5-1b"
+DEFAULT_CONFIG_PATH = str(CONFIGS_DIR / "minicpm5-1b.json")
 
 
 @dataclass
@@ -41,7 +41,7 @@ class StudentConfig:
         return self.teacher_hidden_size * len(self.teacher_extract_layers)
 
     def get_adapter_path(self, checkpoint: str = "adapter_best.safetensors") -> str:
-        """Get adapter path with fallback to existing directory paths."""
+        """Get adapter path with fallback to root adapter_checkpoints/."""
         p1 = Path(self.default_adapter_dir) / checkpoint
         if p1.exists():
             return str(p1)
@@ -51,16 +51,13 @@ class StudentConfig:
         return str(p1)
 
     def get_lora_path(self, checkpoint: str = "final/transformer_lora") -> str:
-        """Get LoRA path with fallback to existing directory paths."""
+        """Get LoRA path with fallback to root lora_checkpoints/."""
         p1 = Path(self.default_lora_dir) / checkpoint
         if p1.exists():
             return str(p1)
-        p2 = Path("lora_checkpoints_15k") / checkpoint
+        p2 = Path("lora_checkpoints") / checkpoint
         if p2.exists():
             return str(p2)
-        p3 = Path("lora_checkpoints") / checkpoint
-        if p3.exists():
-            return str(p3)
         return str(p1)
 
     @classmethod
@@ -79,62 +76,35 @@ class StudentConfig:
             json.dump(asdict(self), f, indent=2)
 
 
-def list_available_configs() -> Dict[str, Path]:
-    """Scan `configs/` directory for available JSON configurations."""
-    configs = {}
-    if CONFIGS_DIR.exists():
-        for p in CONFIGS_DIR.glob("*.json"):
-            configs[p.stem.lower()] = p
-    return configs
-
-
-def get_student_config(preset_or_path: str = DEFAULT_PRESET) -> StudentConfig:
+def get_student_config(preset_or_path: str = DEFAULT_CONFIG_PATH) -> StudentConfig:
     """
-    Retrieve a StudentConfig by preset name, config name, or direct JSON filepath.
+    Retrieve a StudentConfig by JSON file path or name in configs/.
     """
     path_obj = Path(preset_or_path)
 
-    # 1. Direct path to JSON file
+    # 1. Direct path to existing JSON file
     if path_obj.exists() and path_obj.is_file():
         return StudentConfig.from_json(path_obj)
 
-    # 2. Preset name matching file in configs/ directory
-    key = preset_or_path.lower().strip()
-    if key.endswith(".json"):
-        key = key[:-5]
+    # 2. Check under configs/ directory
+    if not preset_or_path.endswith(".json"):
+        candidate = CONFIGS_DIR / f"{preset_or_path}.json"
+    else:
+        candidate = CONFIGS_DIR / path_obj.name
 
-    available = list_available_configs()
+    if candidate.exists():
+        return StudentConfig.from_json(candidate)
 
-    if key in available:
-        return StudentConfig.from_json(available[key])
-
-    # Aliases
-    aliases = {
-        "minicpm-1b": "minicpm5-1b",
-        "smollm2-135m-instruct": "smollm2-135m",
-    }
-    if key in aliases and aliases[key] in available:
-        return StudentConfig.from_json(available[aliases[key]])
-
-    # 3. Match against HF model IDs in available configs
-    for cfg_path in available.values():
-        cfg = StudentConfig.from_json(cfg_path)
-        if key == cfg.student_model_id.lower():
-            return cfg
-
-    valid_names = sorted(list(available.keys()))
-    raise ValueError(
-        f"Unknown student config or file path: '{preset_or_path}'. "
-        f"Available presets in configs/: {valid_names}"
+    raise FileNotFoundError(
+        f"Config file not found at '{preset_or_path}' or '{candidate}'."
     )
 
 
 def add_config_argument(parser: argparse.ArgumentParser):
     """Utility helper to add --config CLI flag to scripts."""
-    available_names = sorted(list(list_available_configs().keys()))
     parser.add_argument(
         "--config",
         type=str,
-        default=DEFAULT_PRESET,
-        help=f"Student model config preset or JSON filepath (default: {DEFAULT_PRESET}). Options: {', '.join(available_names)}",
+        default=DEFAULT_CONFIG_PATH,
+        help=f"Path to student JSON config file (default: {DEFAULT_CONFIG_PATH})",
     )

@@ -10,17 +10,17 @@ flux2tiny adapts [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX
 
 Model configurations are stored as clean, human-readable JSON files in the [`configs/`](file:///home/emilio/Documents/flux2tiny/configs) directory.
 
-All scripts accept either a preset name (e.g. `--config minicpm5-1b`) or a direct path to a custom JSON file (e.g. `--config configs/my_custom_model.json`):
+All scripts accept either a JSON file path (e.g. `--config configs/minicpm5-1b.json`) or a config name in `configs/`:
 
-| Preset Name | JSON Config | Model ID | Params | Hidden Size | Layers Extracted | Adapter Size |
-|:------------|:------------|:---------|:-------|:------------|:-----------------|:-------------|
-| `minicpm5-1b` | [`configs/minicpm5-1b.json`](file:///home/emilio/Documents/flux2tiny/configs/minicpm5-1b.json) | `openbmb/MiniCPM5-1B` | 1.08B | 1536 | `[5, 12, 19]` | ~11.8M params |
-| `qwen3.5-0.8b` | [`configs/qwen3.5-0.8b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-0.8b.json) | `Qwen/Qwen3.5-0.8B` | 0.8B | 1024 | `[7, 15, 23]` | ~7.9M params |
-| `qwen3.5-2b` | [`configs/qwen3.5-2b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-2b.json) | `Qwen/Qwen3.5-2B` | 2.0B | 2048 | `[7, 15, 23]` | ~15.7M params |
-| `qwen3.5-4b` | [`configs/qwen3.5-4b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-4b.json) | `Qwen/Qwen3.5-4B` | 4.0B | 2560 | `[7, 19, 31]` | ~19.7M params |
-| `lfm2.5-230m` | [`configs/lfm2.5-230m.json`](file:///home/emilio/Documents/flux2tiny/configs/lfm2.5-230m.json) | `LiquidAI/LFM2.5-230M` | 230M | 1024 | `[3, 7, 11]` | ~7.9M params |
-| `lfm2.5-350m` | [`configs/lfm2.5-350m.json`](file:///home/emilio/Documents/flux2tiny/configs/lfm2.5-350m.json) | `LiquidAI/LFM2.5-350M` | 350M | 1024 | `[4, 8, 12]` | ~7.9M params |
-| `smollm2-135m` | [`configs/smollm2-135m.json`](file:///home/emilio/Documents/flux2tiny/configs/smollm2-135m.json) | `HuggingFaceTB/SmolLM2-135M-Instruct` | 135M | 576 | `[8, 15, 23]` | ~4.4M params |
+| Config File | Model ID | Params | Hidden Size | Layers Extracted | Adapter Size |
+|:------------|:---------|:-------|:------------|:-----------------|:-------------|
+| [`configs/minicpm5-1b.json`](file:///home/emilio/Documents/flux2tiny/configs/minicpm5-1b.json) | `openbmb/MiniCPM5-1B` | 1.08B | 1536 | `[5, 12, 19]` | ~11.8M params |
+| [`configs/qwen3.5-0.8b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-0.8b.json) | `Qwen/Qwen3.5-0.8B` | 0.8B | 1024 | `[7, 15, 23]` | ~7.9M params |
+| [`configs/qwen3.5-2b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-2b.json) | `Qwen/Qwen3.5-2B` | 2.0B | 2048 | `[7, 15, 23]` | ~15.7M params |
+| [`configs/qwen3.5-4b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-4b.json) | `Qwen/Qwen3.5-4B` | 4.0B | 2560 | `[7, 19, 31]` | ~19.7M params |
+| [`configs/lfm2.5-230m.json`](file:///home/emilio/Documents/flux2tiny/configs/lfm2.5-230m.json) | `LiquidAI/LFM2.5-230M` | 230M | 1024 | `[3, 7, 11]` | ~7.9M params |
+| [`configs/lfm2.5-350m.json`](file:///home/emilio/Documents/flux2tiny/configs/lfm2.5-350m.json) | `LiquidAI/LFM2.5-350M` | 350M | 1024 | `[4, 8, 12]` | ~7.9M params |
+| [`configs/smollm2-135m.json`](file:///home/emilio/Documents/flux2tiny/configs/smollm2-135m.json) | `HuggingFaceTB/SmolLM2-135M-Instruct` | 135M | 576 | `[8, 15, 23]` | ~4.4M params |
 
 ---
 
@@ -40,10 +40,10 @@ Both text encoders are frozen. For each training caption:
 
 ```bash
 # Train adapter for MiniCPM5-1B
-python train_adapter.py --config minicpm5-1b --num-epochs 5
+python train_adapter.py --config configs/minicpm5-1b.json --num-epochs 5
 
 # Train adapter for Qwen3.5-4B
-python train_adapter.py --config qwen3.5-4b --num-epochs 5
+python train_adapter.py --config configs/qwen3.5-4b.json --num-epochs 5
 
 # Train adapter using a custom JSON config file
 python train_adapter.py --config configs/my_custom_model.json --num-epochs 5
@@ -68,10 +68,10 @@ python generate_synthetic_dataset.py \
 
 ```bash
 # Flow Matching LoRA distillation for MiniCPM5-1B
-python train_lora.py --config minicpm5-1b --synthetic-dir synthetic_sd_15k --num-epochs 3
+python train_lora.py --config configs/minicpm5-1b.json --synthetic-dir synthetic_sd_15k --num-epochs 3
 
 # Flow Matching LoRA distillation for Qwen3.5-4B
-python train_lora.py --config qwen3.5-4b --synthetic-dir synthetic_sd_15k --num-epochs 3
+python train_lora.py --config configs/qwen3.5-4b.json --synthetic-dir synthetic_sd_15k --num-epochs 3
 ```
 
 ---
@@ -126,20 +126,20 @@ conda activate flux2tiny
 Generate images with MiniCPM5-1B:
 ```bash
 python generate.py "A photo of a dog sitting in a lush garden" \
-    --config minicpm5-1b --size 512x512 --seed 42
+    --config configs/minicpm5-1b.json --size 512x512 --seed 42
 ```
 
 Generate images with Qwen3.5-4B:
 ```bash
 python generate.py "A photo of a dog sitting in a lush garden" \
-    --config qwen3.5-4b --size 512x512 --seed 42
+    --config configs/qwen3.5-4b.json --size 512x512 --seed 42
 ```
 
 ### 3. Upload Trained Weights to Hugging Face
 
 ```bash
-python upload_to_hub.py --config minicpm5-1b --repo-id Emilio407/flux2tiny-weights
-python upload_to_hub.py --config qwen3.5-4b --repo-id Emilio407/flux2tiny-qwen3.5-4b-weights
+python upload_to_hub.py --config configs/minicpm5-1b.json --repo-id Emilio407/flux2tiny-weights
+python upload_to_hub.py --config configs/qwen3.5-4b.json --repo-id Emilio407/flux2tiny-qwen3.5-4b-weights
 ```
 
 ---

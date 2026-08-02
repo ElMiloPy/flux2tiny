@@ -8,7 +8,7 @@
   "teacher_hidden_size": 2560,
   "teacher_extract_layers": [8, 18, 28],
   "vae_model_id": "black-forest-labs/FLUX.2-small-decoder",
-  "default_adapter_dir": "adapter_checkpoints/minicpm5_1b",
-  "default_lora_dir": "lora_checkpoints/minicpm5_1b",
+  "default_adapter_dir": "adapter_checkpoints/minicpm5-1b",
+  "default_lora_dir": "lora_checkpoints/minicpm5-1b",
   "description": "MiniCPM5-1B (1.08B params, hidden_size=1536)"
 }
