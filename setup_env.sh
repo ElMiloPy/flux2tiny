@@ -21,13 +21,13 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 # Install core pip packages
 echo "Installing pip dependencies..."
-pip install accelerate safetensors Pillow tqdm datasets
+pip install accelerate safetensors peft Pillow tqdm datasets
 
 # Bleeding-edge diffusers (required for Flux2KleinPipeline)
 echo "Installing diffusers from git (for Flux2KleinPipeline)..."
 pip install git+https://github.com/huggingface/diffusers.git
 
-# Bleeding-edge transformers (required for LlamaForCausalLM / Qwen3 compat)
+# Bleeding-edge transformers (required for MiniCPM5 / Qwen3 compat)
 echo "Installing transformers from git..."
 pip install git+https://github.com/huggingface/transformers.git
 
@@ -36,5 +36,7 @@ echo "=== Setup complete ==="
 echo "Activate with: conda activate ${ENV_NAME}"
 echo ""
 echo "Next steps:"
-echo "  1. python train_adapter.py   # Train the projection adapter"
-echo "  2. python generate.py        # Generate images"
+echo "  1. python train_adapter.py                    # Stage 1: Adapter pre-training"
+echo "  2. python generate_synthetic_dataset.py       # Stage 2: Teacher latent generation"
+echo "  3. python train_lora.py --synthetic-dir ...   # Stage 3: LoRA distillation"
+echo "  4. python generate.py \"your prompt\"            # Generate images"

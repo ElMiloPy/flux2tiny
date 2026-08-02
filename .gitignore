@@ -13,7 +13,7 @@ ENV/
 .venv
 /opt/miniconda/
 
-# Large Datasets & Synthetic Latents (Do not commit to Git repo)
+# Large Datasets & Synthetic Latents
 synthetic_sd_15k/
 synthetic_dataset/
 test_synthetic/
@@ -21,7 +21,7 @@ dataset/
 my_dataset/
 *.pt
 
-# Model Weights & Checkpoints (Store on Hugging Face Hub / Release Assets instead)
+# Model Weights & Checkpoints (store on HF Hub or release assets)
 adapter_checkpoints/
 lora_checkpoints/
 lora_checkpoints_15k/
@@ -31,6 +31,7 @@ lora_checkpoints_15k/
 
 # Generated Outputs
 output/
+comparisons/
 *.png
 *.jpg
 *.jpeg
