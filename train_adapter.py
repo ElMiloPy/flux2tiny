@@ -24,24 +24,17 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from adapter import PerLayerProjection, ConcatProjection, save_adapter
+from config import get_student_config, add_config_argument
 
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Base Configuration Defaults
 # ---------------------------------------------------------------------------
 DEFAULT_CONFIG = {
     "teacher_model": "Qwen/Qwen3-4B",
-    "student_model": "openbmb/MiniCPM5-1B",
     "adapter_type": "per_layer",  # "per_layer" or "concat"
     "teacher_hidden_size": 2560,
-    "student_hidden_size": 1536,
-    # Which layers to extract hidden states from (0-indexed).
-    # FLUX.2-klein uses 3 layer outputs concatenated to form joint_attention_dim=7680.
-    # For Qwen3-4B (36 layers): typical choices are early/mid/late layers.
-    # We pick layers that span the depth: ~1/4, ~1/2, ~3/4 through.
     "teacher_extract_layers": [8, 18, 28],
-    # For MiniCPM5-1B (24 layers): scaled equivalents
-    "student_extract_layers": [5, 12, 19],
     "num_extract_layers": 3,
     "max_seq_len": 128,
     "batch_size": 4,
@@ -51,7 +44,6 @@ DEFAULT_CONFIG = {
     "warmup_steps": 100,
     "save_every": 500,
     "log_every": 50,
-    "output_dir": "adapter_checkpoints",
     "num_train_samples": 5000,
     "seed": 42,
 }
@@ -369,8 +361,9 @@ def train(config: dict):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train flux2tiny projection adapter")
+    add_config_argument(parser)
     parser.add_argument("--teacher-model", type=str, default=DEFAULT_CONFIG["teacher_model"])
-    parser.add_argument("--student-model", type=str, default=DEFAULT_CONFIG["student_model"])
+    parser.add_argument("--student-model", type=str, default=None, help="Override student model ID")
     parser.add_argument("--adapter-type", type=str, default="per_layer", choices=["per_layer", "concat"])
     parser.add_argument("--batch-size", type=int, default=DEFAULT_CONFIG["batch_size"])
     parser.add_argument("--num-epochs", type=int, default=DEFAULT_CONFIG["num_epochs"])
@@ -378,22 +371,29 @@ if __name__ == "__main__":
     parser.add_argument("--max-seq-len", type=int, default=DEFAULT_CONFIG["max_seq_len"])
     parser.add_argument("--num-train-samples", type=int, default=DEFAULT_CONFIG["num_train_samples"])
     parser.add_argument("--captions-file", type=str, default=None, help="Text file with one caption per line")
-    parser.add_argument("--output-dir", type=str, default=DEFAULT_CONFIG["output_dir"])
+    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for adapter checkpoints")
     parser.add_argument("--seed", type=int, default=DEFAULT_CONFIG["seed"])
     parser.add_argument("--teacher-on-cpu", action="store_true", help="Force teacher model to run on CPU")
     args = parser.parse_args()
 
+    student_cfg = get_student_config(args.config)
+    student_model_id = args.student_model or student_cfg.student_model_id
+    output_dir = args.output_dir or student_cfg.default_adapter_dir
+
     config = DEFAULT_CONFIG.copy()
     config.update({
+        "preset": student_cfg.name,
         "teacher_model": args.teacher_model,
-        "student_model": args.student_model,
+        "student_model": student_model_id,
+        "student_hidden_size": student_cfg.hidden_size,
+        "student_extract_layers": student_cfg.extract_layers,
         "adapter_type": args.adapter_type,
         "batch_size": args.batch_size,
         "num_epochs": args.num_epochs,
         "learning_rate": args.learning_rate,
         "max_seq_len": args.max_seq_len,
         "num_train_samples": args.num_train_samples,
-        "output_dir": args.output_dir,
+        "output_dir": output_dir,
         "seed": args.seed,
         "teacher_on_cpu": args.teacher_on_cpu,
     })

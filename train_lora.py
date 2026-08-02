@@ -24,6 +24,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from adapter import PerLayerProjection, ConcatProjection, save_adapter, load_adapter
+from config import get_student_config, add_config_argument, StudentConfig
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +157,12 @@ class ImageCaptionDataset(Dataset):
 # Training Logic
 # ---------------------------------------------------------------------------
 def train_lora(
-    flux_model_id: str = "black-forest-labs/FLUX.2-klein-4B",
-    vae_model_id: str = "black-forest-labs/FLUX.2-small-decoder",
-    student_model_id: str = "openbmb/MiniCPM5-1B",
-    adapter_path: str = "adapter_checkpoints/adapter_best.safetensors",
-    output_dir: str = "lora_checkpoints",
+    config: str | StudentConfig = "minicpm-1b",
+    flux_model_id: str | None = None,
+    vae_model_id: str | None = None,
+    student_model_id: str | None = None,
+    adapter_path: str | None = None,
+    output_dir: str | None = None,
     image_dir: str | None = None,
     hf_dataset: str | None = None,
     synthetic_dir: str | None = None,
@@ -170,18 +172,30 @@ def train_lora(
     num_epochs: int = 10,
     learning_rate: float = 1e-4,
     img_size: int = 512,
-    student_extract_layers: list[int] = [5, 12, 19],
 ):
+    student_cfg = get_student_config(config) if isinstance(config, str) else config
+    flux_model_id = flux_model_id or student_cfg.teacher_model_id
+    vae_model_id = vae_model_id or student_cfg.vae_model_id
+    student_model_id = student_model_id or student_cfg.student_model_id
+    student_extract_layers = student_cfg.extract_layers
+
+    if adapter_path is None:
+        adapter_path = student_cfg.get_adapter_path("adapter_best.safetensors")
+        if not Path(adapter_path).exists():
+            adapter_path = student_cfg.get_adapter_path("adapter_final.safetensors")
+
+    output_dir = output_dir or student_cfg.default_lora_dir
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    print("=== Training FLUX.2 LoRA + Adapter ===")
+    print(f"=== Training FLUX.2 LoRA + Adapter (Preset: {student_cfg.name}) ===")
     print(f"Device: {device}")
     print(f"Image Size: {img_size}x{img_size}, LoRA Rank: {lora_rank}")
 
-    # 1. Load Student Text Encoder (MiniCPM5-1B) — Frozen
+    # 1. Load Student Text Encoder — Frozen
     print(f"\nLoading student text encoder: {student_model_id}...")
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(student_model_id, trust_remote_code=True)
@@ -198,8 +212,13 @@ def train_lora(
     # 2. Load Adapter — Trainable
     print(f"\nLoading adapter from {adapter_path}...")
     adapter = load_adapter(
-        adapter_path, adapter_type="per_layer", source_dim=1536, target_dim=2560,
-        num_layers=3, device=str(device), dtype=dtype
+        adapter_path,
+        adapter_type="per_layer",
+        source_dim=student_cfg.hidden_size,
+        target_dim=student_cfg.teacher_hidden_size,
+        num_layers=student_cfg.num_layers,
+        device=str(device),
+        dtype=dtype,
     )
     adapter.train()
     for p in adapter.parameters():
@@ -353,6 +372,8 @@ def train_lora(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train FLUX.2 LoRA + Adapter")
+    add_config_argument(parser)
+    parser.add_argument("--adapter-path", type=str, default=None, help="Path to pre-trained adapter weights")
     parser.add_argument("--image-dir", type=str, default=None, help="Directory of training images + text captions")
     parser.add_argument("--hf-dataset", type=str, default=None, help="Hugging Face dataset name (e.g. jpawan33/kag100-image-captioning-dataset)")
     parser.add_argument("--synthetic-dir", type=str, default=None, help="Directory of synthetic teacher latents")
@@ -360,10 +381,12 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--img-size", type=int, default=512)
-    parser.add_argument("--output-dir", type=str, default="lora_checkpoints")
+    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for LoRA checkpoints")
     args = parser.parse_args()
 
     train_lora(
+        config=args.config,
+        adapter_path=args.adapter_path,
         image_dir=args.image_dir,
         hf_dataset=args.hf_dataset,
         synthetic_dir=args.synthetic_dir,
