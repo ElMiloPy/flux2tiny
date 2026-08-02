@@ -1,0 +1,14 @@
+{
+  "name": "lfm2.5-230m",
+  "student_model_id": "LiquidAI/LFM2.5-230M",
+  "hidden_size": 1024,
+  "extract_layers": [3, 7, 11],
+  "num_layers": 3,
+  "teacher_model_id": "black-forest-labs/FLUX.2-klein-4B",
+  "teacher_hidden_size": 2560,
+  "teacher_extract_layers": [8, 18, 28],
+  "vae_model_id": "black-forest-labs/FLUX.2-small-decoder",
+  "default_adapter_dir": "adapter_checkpoints/lfm2.5_230m",
+  "default_lora_dir": "lora_checkpoints/lfm2.5_230m",
+  "description": "Liquid AI LFM2.5-230M (230M params, hidden_size=1024)"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "smollm2-135m",
+  "student_model_id": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "hidden_size": 576,
+  "extract_layers": [8, 15, 23],
+  "num_layers": 3,
+  "teacher_model_id": "black-forest-labs/FLUX.2-klein-4B",
+  "teacher_hidden_size": 2560,
+  "teacher_extract_layers": [8, 18, 28],
+  "vae_model_id": "black-forest-labs/FLUX.2-small-decoder",
+  "default_adapter_dir": "adapter_checkpoints/smollm2_135m",
+  "default_lora_dir": "lora_checkpoints/smollm2_135m",
+  "description": "SmolLM2-135M-Instruct (135M params, hidden_size=576)"
+}

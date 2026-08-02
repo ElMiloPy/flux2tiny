@@ -1,20 +1,18 @@
 """
 flux2tiny — Model Configuration Registry.
 
-Supports configurable student text encoders for knowledge distillation to FLUX.2-klein-4B:
-  - MiniCPM5-1B (1.08B)
-  - Qwen3.5-0.8B (0.8B)
-  - Qwen3.5-2B (2.0B)
-  - Qwen3.5-4B (4.0B)
-  - LFM2.5-230M (230M)
-  - LFM2.5-350M (350M)
-  - SmolLM2-135M-Instruct (135M)
+Loads JSON student model configurations from the `configs/` directory.
 """
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Union
 from pathlib import Path
 import argparse
+
+
+CONFIGS_DIR = Path(__file__).parent / "configs"
+DEFAULT_PRESET = "minicpm5-1b"
 
 
 @dataclass
@@ -65,121 +63,78 @@ class StudentConfig:
             return str(p3)
         return str(p1)
 
+    @classmethod
+    def from_json(cls, json_path: Union[str, Path]) -> "StudentConfig":
+        """Load StudentConfig from a JSON file."""
+        path = Path(json_path)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls(**data)
 
-# Pre-defined student model presets
-PRESETS: Dict[str, StudentConfig] = {
-    "minicpm5-1b": StudentConfig(
-        name="minicpm5-1b",
-        student_model_id="openbmb/MiniCPM5-1B",
-        hidden_size=1536,
-        extract_layers=[5, 12, 19],
-        default_adapter_dir="adapter_checkpoints/minicpm5_1b",
-        default_lora_dir="lora_checkpoints/minicpm5_1b",
-        description="MiniCPM5-1B (1.08B params, hidden_size=1536)",
-    ),
-    "minicpm-1b": StudentConfig(
-        name="minicpm5-1b",
-        student_model_id="openbmb/MiniCPM5-1B",
-        hidden_size=1536,
-        extract_layers=[5, 12, 19],
-        default_adapter_dir="adapter_checkpoints/minicpm5_1b",
-        default_lora_dir="lora_checkpoints/minicpm5_1b",
-        description="MiniCPM5-1B (1.08B params, hidden_size=1536)",
-    ),
-    "qwen3.5-0.8b": StudentConfig(
-        name="qwen3.5-0.8b",
-        student_model_id="Qwen/Qwen3.5-0.8B",
-        hidden_size=1024,
-        extract_layers=[7, 15, 23],  # Full-attention layers in hybrid architecture
-        default_adapter_dir="adapter_checkpoints/qwen3.5_0.8b",
-        default_lora_dir="lora_checkpoints/qwen3.5_0.8b",
-        description="Qwen3.5-0.8B (0.8B params, hidden_size=1024, hybrid linear/full attention)",
-    ),
-    "qwen3.5-2b": StudentConfig(
-        name="qwen3.5-2b",
-        student_model_id="Qwen/Qwen3.5-2B",
-        hidden_size=2048,
-        extract_layers=[7, 15, 23],  # Full-attention layers in hybrid architecture
-        default_adapter_dir="adapter_checkpoints/qwen3.5_2b",
-        default_lora_dir="lora_checkpoints/qwen3.5_2b",
-        description="Qwen3.5-2B (2.0B params, hidden_size=2048, hybrid linear/full attention)",
-    ),
-    "qwen3.5-4b": StudentConfig(
-        name="qwen3.5-4b",
-        student_model_id="Qwen/Qwen3.5-4B",
-        hidden_size=2560,
-        extract_layers=[7, 19, 31],  # 32 layers total, full-attention layers in hybrid architecture
-        default_adapter_dir="adapter_checkpoints/qwen3.5_4b",
-        default_lora_dir="lora_checkpoints/qwen3.5_4b",
-        description="Qwen3.5-4B (4.0B params, hidden_size=2560, hybrid linear/full attention)",
-    ),
-    "lfm2.5-230m": StudentConfig(
-        name="lfm2.5-230m",
-        student_model_id="LiquidAI/LFM2.5-230M",
-        hidden_size=1024,
-        extract_layers=[3, 7, 11],  # 14 layers total
-        default_adapter_dir="adapter_checkpoints/lfm2.5_230m",
-        default_lora_dir="lora_checkpoints/lfm2.5_230m",
-        description="Liquid AI LFM2.5-230M (230M params, hidden_size=1024)",
-    ),
-    "lfm2.5-350m": StudentConfig(
-        name="lfm2.5-350m",
-        student_model_id="LiquidAI/LFM2.5-350M",
-        hidden_size=1024,
-        extract_layers=[4, 8, 12],  # 16 layers total
-        default_adapter_dir="adapter_checkpoints/lfm2.5_350m",
-        default_lora_dir="lora_checkpoints/lfm2.5_350m",
-        description="Liquid AI LFM2.5-350M (350M params, hidden_size=1024)",
-    ),
-    "smollm2-135m": StudentConfig(
-        name="smollm2-135m",
-        student_model_id="HuggingFaceTB/SmolLM2-135M-Instruct",
-        hidden_size=576,
-        extract_layers=[8, 15, 23],  # 30 layers total
-        default_adapter_dir="adapter_checkpoints/smollm2_135m",
-        default_lora_dir="lora_checkpoints/smollm2_135m",
-        description="SmolLM2-135M-Instruct (135M params, hidden_size=576)",
-    ),
-    "smollm2-135m-instruct": StudentConfig(
-        name="smollm2-135m",
-        student_model_id="HuggingFaceTB/SmolLM2-135M-Instruct",
-        hidden_size=576,
-        extract_layers=[8, 15, 23],  # 30 layers total
-        default_adapter_dir="adapter_checkpoints/smollm2_135m",
-        default_lora_dir="lora_checkpoints/smollm2_135m",
-        description="SmolLM2-135M-Instruct (135M params, hidden_size=576)",
-    ),
-}
-
-DEFAULT_PRESET = "minicpm5-1b"
+    def to_json(self, json_path: Union[str, Path]):
+        """Save StudentConfig to a JSON file."""
+        path = Path(json_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(asdict(self), f, indent=2)
 
 
-def get_student_config(preset_name: str = DEFAULT_PRESET) -> StudentConfig:
+def list_available_configs() -> Dict[str, Path]:
+    """Scan `configs/` directory for available JSON configurations."""
+    configs = {}
+    if CONFIGS_DIR.exists():
+        for p in CONFIGS_DIR.glob("*.json"):
+            configs[p.stem.lower()] = p
+    return configs
+
+
+def get_student_config(preset_or_path: str = DEFAULT_PRESET) -> StudentConfig:
     """
-    Retrieve a StudentConfig by preset name.
-    If preset_name is not in PRESETS, fallback or raise ValueError.
+    Retrieve a StudentConfig by preset name, config name, or direct JSON filepath.
     """
-    key = preset_name.lower().strip()
-    if key in PRESETS:
-        return PRESETS[key]
+    path_obj = Path(preset_or_path)
 
-    # Check if user provided an alias or direct model ID
-    for name, cfg in PRESETS.items():
+    # 1. Direct path to JSON file
+    if path_obj.exists() and path_obj.is_file():
+        return StudentConfig.from_json(path_obj)
+
+    # 2. Preset name matching file in configs/ directory
+    key = preset_or_path.lower().strip()
+    if key.endswith(".json"):
+        key = key[:-5]
+
+    available = list_available_configs()
+
+    if key in available:
+        return StudentConfig.from_json(available[key])
+
+    # Aliases
+    aliases = {
+        "minicpm-1b": "minicpm5-1b",
+        "smollm2-135m-instruct": "smollm2-135m",
+    }
+    if key in aliases and aliases[key] in available:
+        return StudentConfig.from_json(available[aliases[key]])
+
+    # 3. Match against HF model IDs in available configs
+    for cfg_path in available.values():
+        cfg = StudentConfig.from_json(cfg_path)
         if key == cfg.student_model_id.lower():
             return cfg
 
+    valid_names = sorted(list(available.keys()))
     raise ValueError(
-        f"Unknown student config preset: '{preset_name}'. "
-        f"Available presets: {list(PRESETS.keys())}"
+        f"Unknown student config or file path: '{preset_or_path}'. "
+        f"Available presets in configs/: {valid_names}"
     )
 
 
 def add_config_argument(parser: argparse.ArgumentParser):
     """Utility helper to add --config CLI flag to scripts."""
+    available_names = sorted(list(list_available_configs().keys()))
     parser.add_argument(
         "--config",
         type=str,
         default=DEFAULT_PRESET,
-        choices=list(PRESETS.keys()),
-        help=f"Student model configuration preset (default: {DEFAULT_PRESET}). Options: {', '.join(PRESETS.keys())}",
+        help=f"Student model config preset or JSON filepath (default: {DEFAULT_PRESET}). Options: {', '.join(available_names)}",
     )

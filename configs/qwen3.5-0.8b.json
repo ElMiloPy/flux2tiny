@@ -1,0 +1,14 @@
+{
+  "name": "qwen3.5-0.8b",
+  "student_model_id": "Qwen/Qwen3.5-0.8B",
+  "hidden_size": 1024,
+  "extract_layers": [7, 15, 23],
+  "num_layers": 3,
+  "teacher_model_id": "black-forest-labs/FLUX.2-klein-4B",
+  "teacher_hidden_size": 2560,
+  "teacher_extract_layers": [8, 18, 28],
+  "vae_model_id": "black-forest-labs/FLUX.2-small-decoder",
+  "default_adapter_dir": "adapter_checkpoints/qwen3.5_0.8b",
+  "default_lora_dir": "lora_checkpoints/qwen3.5_0.8b",
+  "description": "Qwen3.5-0.8B (0.8B params, hidden_size=1024, hybrid linear/full attention)"
+}

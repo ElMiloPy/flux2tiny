@@ -6,19 +6,21 @@ flux2tiny adapts [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX
 
 ---
 
-## ⚙️ Model Configurations (`config.py`)
+## ⚙️ Model Configurations (`configs/*.json`)
 
-All scripts in `flux2tiny` accept the `--config` CLI flag to select the student text encoder:
+Model configurations are stored as clean, human-readable JSON files in the [`configs/`](file:///home/emilio/Documents/flux2tiny/configs) directory.
 
-| Preset Name | Model ID | Params | Hidden Size | Layers Extracted | Adapter Size |
-|:------------|:---------|:-------|:------------|:-----------------|:-------------|
-| `minicpm5-1b` | `openbmb/MiniCPM5-1B` | 1.08B | 1536 | `[5, 12, 19]` | ~11.8M params |
-| `qwen3.5-0.8b` | `Qwen/Qwen3.5-0.8B` | 0.8B | 1024 | `[7, 15, 23]` | ~7.9M params |
-| `qwen3.5-2b` | `Qwen/Qwen3.5-2B` | 2.0B | 2048 | `[7, 15, 23]` | ~15.7M params |
-| `qwen3.5-4b` | `Qwen/Qwen3.5-4B` | 4.0B | 2560 | `[7, 19, 31]` | ~19.7M params |
-| `lfm2.5-230m` | `LiquidAI/LFM2.5-230M` | 230M | 1024 | `[3, 7, 11]` | ~7.9M params |
-| `lfm2.5-350m` | `LiquidAI/LFM2.5-350M` | 350M | 1024 | `[4, 8, 12]` | ~7.9M params |
-| `smollm2-135m` | `HuggingFaceTB/SmolLM2-135M-Instruct` | 135M | 576 | `[8, 15, 23]` | ~4.4M params |
+All scripts accept either a preset name (e.g. `--config minicpm5-1b`) or a direct path to a custom JSON file (e.g. `--config configs/my_custom_model.json`):
+
+| Preset Name | JSON Config | Model ID | Params | Hidden Size | Layers Extracted | Adapter Size |
+|:------------|:------------|:---------|:-------|:------------|:-----------------|:-------------|
+| `minicpm5-1b` | [`configs/minicpm5-1b.json`](file:///home/emilio/Documents/flux2tiny/configs/minicpm5-1b.json) | `openbmb/MiniCPM5-1B` | 1.08B | 1536 | `[5, 12, 19]` | ~11.8M params |
+| `qwen3.5-0.8b` | [`configs/qwen3.5-0.8b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-0.8b.json) | `Qwen/Qwen3.5-0.8B` | 0.8B | 1024 | `[7, 15, 23]` | ~7.9M params |
+| `qwen3.5-2b` | [`configs/qwen3.5-2b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-2b.json) | `Qwen/Qwen3.5-2B` | 2.0B | 2048 | `[7, 15, 23]` | ~15.7M params |
+| `qwen3.5-4b` | [`configs/qwen3.5-4b.json`](file:///home/emilio/Documents/flux2tiny/configs/qwen3.5-4b.json) | `Qwen/Qwen3.5-4B` | 4.0B | 2560 | `[7, 19, 31]` | ~19.7M params |
+| `lfm2.5-230m` | [`configs/lfm2.5-230m.json`](file:///home/emilio/Documents/flux2tiny/configs/lfm2.5-230m.json) | `LiquidAI/LFM2.5-230M` | 230M | 1024 | `[3, 7, 11]` | ~7.9M params |
+| `lfm2.5-350m` | [`configs/lfm2.5-350m.json`](file:///home/emilio/Documents/flux2tiny/configs/lfm2.5-350m.json) | `LiquidAI/LFM2.5-350M` | 350M | 1024 | `[4, 8, 12]` | ~7.9M params |
+| `smollm2-135m` | [`configs/smollm2-135m.json`](file:///home/emilio/Documents/flux2tiny/configs/smollm2-135m.json) | `HuggingFaceTB/SmolLM2-135M-Instruct` | 135M | 576 | `[8, 15, 23]` | ~4.4M params |
 
 ---
 
@@ -43,8 +45,8 @@ python train_adapter.py --config minicpm5-1b --num-epochs 5
 # Train adapter for Qwen3.5-4B
 python train_adapter.py --config qwen3.5-4b --num-epochs 5
 
-# Train adapter for SmolLM2-135M
-python train_adapter.py --config smollm2-135m --num-epochs 5
+# Train adapter using a custom JSON config file
+python train_adapter.py --config configs/my_custom_model.json --num-epochs 5
 ```
 
 ### Stage 2 — Synthetic Teacher Latent Generation
@@ -146,7 +148,15 @@ python upload_to_hub.py --config qwen3.5-4b --repo-id Emilio407/flux2tiny-qwen3.
 
 ```
 flux2tiny/
-├── config.py                     # Central configuration registry
+├── configs/                      # JSON configuration directory for student models
+│   ├── minicpm5-1b.json
+│   ├── qwen3.5-0.8b.json
+│   ├── qwen3.5-2b.json
+│   ├── qwen3.5-4b.json
+│   ├── lfm2.5-230m.json
+│   ├── lfm2.5-350m.json
+│   └── smollm2-135m.json
+├── config.py                     # Central configuration module & loader
 ├── adapter.py                    # Projection adapter (PerLayerProjection / ConcatProjection)
 ├── pipeline.py                   # Flux2TinyPipeline — inference wrapper
 ├── generate.py                   # CLI image generation
