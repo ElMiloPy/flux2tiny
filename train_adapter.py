@@ -2,13 +2,13 @@
 flux2tiny — Training script for the projection adapter.
 
 Knowledge distillation approach:
-  1. Load both Qwen3-4B (teacher) and MiniCPM5-1B (student) text encoders
+  1. Load both Qwen3-4B (teacher) and student text encoders
   2. For a batch of captions, extract hidden states from both
   3. Train the projection adapter to minimize MSE between
      adapter(student_hidden_states) and teacher_hidden_states
   4. All encoder weights are frozen — only the adapter trains
 
-This is feasible on an RTX A4500 (16GB VRAM) with CPU offloading.
+Supports single GPU, multi-GPU layer sharding, and accelerate DDP (dual GPU parallel).
 """
 
 import argparse
@@ -25,6 +25,7 @@ from tqdm import tqdm
 
 from adapter import PerLayerProjection, ConcatProjection, save_adapter
 from config import get_student_config, add_config_argument, get_default_dtype
+from accelerate import Accelerator
 
 
 # ---------------------------------------------------------------------------
@@ -50,61 +51,55 @@ DEFAULT_CONFIG = {
 
 
 # ---------------------------------------------------------------------------
-# Simple caption dataset (generates synthetic captions for training)
+# Simple Dataset of Synthetic Prompts
 # ---------------------------------------------------------------------------
 class CaptionDataset(Dataset):
-    """
-    Loads captions for training. By default uses a curated set of diverse
-    prompts. Can also load from a text file (one caption per line).
-    """
-
-    BUILTIN_PROMPTS = [
-        "A photo of a cat sitting on a windowsill, golden hour lighting",
-        "An astronaut riding a horse on the moon, digital art",
-        "A beautiful sunset over the ocean with dramatic clouds",
-        "Portrait of a woman with flowers in her hair, oil painting style",
-        "A futuristic city skyline at night with neon lights",
-        "A cozy cabin in the woods during autumn, leaves falling",
-        "A dragon breathing fire over a medieval castle, fantasy art",
-        "A close-up of a butterfly on a lavender flower, macro photography",
-        "An underwater scene with colorful coral reef and tropical fish",
-        "A robot playing chess with a human in a dimly lit room",
-        "A steampunk airship flying through clouds at sunset",
-        "A minimalist abstract painting with bold red and blue shapes",
-        "A happy golden retriever running through a field of sunflowers",
-        "An ancient Greek temple ruins under a starry night sky",
-        "A cyberpunk street market with holographic signs, rain falling",
-        "A hand holding a crystal ball reflecting a mountain landscape",
-        "A vintage red car parked on a coastal road, retro style",
-        "A magical forest with glowing mushrooms and fireflies at night",
-        "A chef preparing sushi in a traditional Japanese kitchen",
-        "A snow-covered mountain peak with the northern lights above",
-        "A whimsical treehouse village connected by rope bridges",
-        "A detailed pencil sketch of an old sailing ship",
-        "A fox sitting in a snowy landscape, watercolor style",
-        "A bustling Tokyo street crossing at night, neon reflections",
-        "A peaceful zen garden with raked sand and moss-covered stones",
-        "Two people dancing in the rain under a single umbrella",
-        "A macro shot of morning dew drops on a spider web",
-        "A surreal painting of clocks melting in a desert landscape",
-        "An old library with towering bookshelves and warm lamp light",
-        "A baby elephant playing in mud with its mother watching",
-    ]
-
-    def __init__(self, captions_file: str | None = None, num_samples: int = 5000):
-        if captions_file and Path(captions_file).exists():
-            with open(captions_file) as f:
-                self.captions = [line.strip() for line in f if line.strip()]
+    def __init__(self, captions: list[str] = None, num_samples: int = 5000):
+        if captions is not None:
+            self.captions = captions
         else:
-            # Repeat and shuffle built-in prompts to reach num_samples
-            reps = math.ceil(num_samples / len(self.BUILTIN_PROMPTS))
-            self.captions = (self.BUILTIN_PROMPTS * reps)[:num_samples]
+            base_prompts = [
+                "A photo of a dog sitting in a lush green garden",
+                "A futuristic city with flying cars at sunset",
+                "An oil painting of a cottage near a serene lake",
+                "A close-up portrait of a woman with red hair",
+                "A cute cat wearing a tiny wizard hat",
+                "A watercolor landscape of snow-capped mountains",
+                "A delicious slice of chocolate cake on a ceramic plate",
+                "A retro 80s arcade with neon lights",
+                "A majestic dragon perched atop a rocky peak",
+                "A cozy coffee shop interior on a rainy afternoon",
+                "A vibrant coral reef with colorful tropical fish",
+                "A vintage sports car driving along a coastal highway",
+                "An astronaut standing on the surface of Mars",
+                "A whimsical treehouse in an enchanted forest",
+                "A minimalist modern kitchen with marble countertops",
+                "A dramatic stormy sky over a wheat field",
+                "A robot reading a book in a dusty library",
+                "A plate of fresh sushi with ginger and wasabi",
+                "A mechanical pocket watch with visible gears",
+                "A quiet cobblestone street in a European village",
+            ]
+            self.captions = [
+                f"{base_prompts[i % len(base_prompts)]} (variant {i // len(base_prompts)})"
+                for i in range(num_samples)
+            ]
 
     def __len__(self):
         return len(self.captions)
 
     def __getitem__(self, idx):
         return self.captions[idx]
+
+
+# ---------------------------------------------------------------------------
+# Learning rate schedule
+# ---------------------------------------------------------------------------
+def get_lr(step: int, warmup_steps: int, total_steps: int, max_lr: float) -> float:
+    if step < warmup_steps:
+        return max_lr * (step / max(1, warmup_steps))
+    progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+    return max_lr * 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
 # ---------------------------------------------------------------------------
@@ -141,13 +136,10 @@ def extract_hidden_states(
             return_dict=True,
         )
 
-    # outputs.hidden_states is a tuple of (num_layers + 1) tensors
-    # Index 0 is the embedding layer output, index i is layer i's output
     hidden_states = outputs.hidden_states
 
     extracted = []
     for layer_idx in extract_layers:
-        # +1 because index 0 is the embedding layer
         hs = hidden_states[layer_idx + 1].to(dtype)
         extracted.append(hs)
 
@@ -155,45 +147,39 @@ def extract_hidden_states(
 
 
 # ---------------------------------------------------------------------------
-# Learning rate scheduler with warmup
-# ---------------------------------------------------------------------------
-def get_lr(step: int, warmup_steps: int, total_steps: int, base_lr: float) -> float:
-    if step < warmup_steps:
-        return base_lr * step / max(warmup_steps, 1)
-    progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
-    return base_lr * 0.5 * (1 + math.cos(math.pi * progress))
-
-
-# ---------------------------------------------------------------------------
 # Main training loop
 # ---------------------------------------------------------------------------
 def train(config: dict):
+    accelerator = Accelerator(
+        mixed_precision="fp16" if config.get("fp16") else "no"
+    )
+
     torch.manual_seed(config["seed"])
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = accelerator.device
     dtype = torch.float16 if config.get("fp16", False) else get_default_dtype()
-    use_multi_gpu = config.get("multi_gpu", False) or (torch.cuda.is_available() and torch.cuda.device_count() > 1)
+    use_multi_gpu_sharding = config.get("multi_gpu", False) and accelerator.num_processes == 1
+
     output_dir = Path(config["output_dir"])
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save config
-    with open(output_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
-
-    print(f"Device: {device} | Dtype: {dtype} | Multi-GPU: {use_multi_gpu}")
-    print(f"Output: {output_dir}")
+    if accelerator.is_main_process:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with open(output_dir / "config.json", "w") as f:
+            json.dump(config, f, indent=2)
+        print(f"Device: {device} | Dtype: {dtype} | Processes: {accelerator.num_processes} | Sharding: {use_multi_gpu_sharding}")
+        print(f"Output: {output_dir}")
 
     # -----------------------------------------------------------------------
-    # Load teacher (Qwen3-4B) — frozen on GPU (sharded if multi-GPU)
+    # Load teacher (Qwen3-4B) — frozen
     # -----------------------------------------------------------------------
     if config.get("teacher_on_cpu", False):
         teacher_device = "cpu"
-    elif use_multi_gpu:
+    elif use_multi_gpu_sharding:
         teacher_device = "auto"
     else:
         teacher_device = device
 
-    print(f"\nLoading teacher: {config['teacher_model']} on {teacher_device}...")
+    if accelerator.is_main_process:
+        print(f"\nLoading teacher: {config['teacher_model']} on {teacher_device}...")
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     teacher_tokenizer = AutoTokenizer.from_pretrained(
@@ -211,12 +197,12 @@ def train(config: dict):
     teacher_model.eval()
     for p in teacher_model.parameters():
         p.requires_grad = False
-    print(f"  Teacher loaded: {sum(p.numel() for p in teacher_model.parameters()):,} params")
 
     # -----------------------------------------------------------------------
-    # Load student (MiniCPM5-1B) — frozen, on GPU
+    # Load student (MiniCPM5-1B / LFM2.5 / SmolLM2, etc.) — frozen
     # -----------------------------------------------------------------------
-    print(f"\nLoading student: {config['student_model']}...")
+    if accelerator.is_main_process:
+        print(f"\nLoading student: {config['student_model']}...")
     student_tokenizer = AutoTokenizer.from_pretrained(
         config["student_model"], trust_remote_code=True
     )
@@ -226,18 +212,18 @@ def train(config: dict):
     student_model = AutoModelForCausalLM.from_pretrained(
         config["student_model"],
         torch_dtype=dtype,
-        device_map=device,
+        device_map=device if not use_multi_gpu_sharding else "auto",
         trust_remote_code=True,
     )
     student_model.eval()
     for p in student_model.parameters():
         p.requires_grad = False
-    print(f"  Student loaded: {sum(p.numel() for p in student_model.parameters()):,} params")
 
     # -----------------------------------------------------------------------
     # Create adapter
     # -----------------------------------------------------------------------
-    print(f"\nCreating adapter (type={config['adapter_type']})...")
+    if accelerator.is_main_process:
+        print(f"\nCreating adapter (type={config['adapter_type']})...")
     if config["adapter_type"] == "per_layer":
         adapter = PerLayerProjection(
             source_dim=config["student_hidden_size"],
@@ -251,7 +237,6 @@ def train(config: dict):
             num_layers=config["num_extract_layers"],
         )
     adapter = adapter.to(device=device, dtype=torch.float32)  # Train in fp32 for stability
-    print(f"  Adapter params: {adapter.total_params:,}")
 
     # -----------------------------------------------------------------------
     # Dataset and dataloader
@@ -263,12 +248,9 @@ def train(config: dict):
         shuffle=True,
         drop_last=True,
     )
-    total_steps = len(dataloader) * config["num_epochs"]
-    print(f"\nDataset: {len(dataset)} captions")
-    print(f"Total training steps: {total_steps}")
 
     # -----------------------------------------------------------------------
-    # Optimizer
+    # Optimizer & Prepare
     # -----------------------------------------------------------------------
     optimizer = torch.optim.AdamW(
         adapter.parameters(),
@@ -277,19 +259,26 @@ def train(config: dict):
     )
     loss_fn = nn.MSELoss()
 
-    # -----------------------------------------------------------------------
-    # Training
-    # -----------------------------------------------------------------------
+    adapter, optimizer, dataloader = accelerator.prepare(adapter, optimizer, dataloader)
+
+    total_steps = len(dataloader) * config["num_epochs"]
+    if accelerator.is_main_process:
+        print(f"\nDataset: {len(dataset)} captions")
+        print(f"Total training steps: {total_steps}")
+        print("\n=== Training ===")
+
     global_step = 0
-    best_loss = float("inf")
     running_loss = 0.0
 
-    print("\n=== Training ===")
     for epoch in range(config["num_epochs"]):
         epoch_loss = 0.0
         epoch_steps = 0
 
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{config['num_epochs']}")
+        pbar = tqdm(
+            dataloader,
+            desc=f"Epoch {epoch+1}/{config['num_epochs']}",
+            disable=not accelerator.is_main_process,
+        )
         for batch_texts in pbar:
             # Update LR
             lr = get_lr(global_step, config["warmup_steps"], total_steps, config["learning_rate"])
@@ -328,8 +317,9 @@ def train(config: dict):
             loss = loss_fn(adapter_output, teacher_target)
 
             optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(adapter.parameters(), 1.0)
+            accelerator.backward(loss)
+            if accelerator.sync_gradients:
+                accelerator.clip_grad_norm_(adapter.parameters(), 1.0)
             optimizer.step()
 
             loss_val = loss.item()
@@ -338,31 +328,34 @@ def train(config: dict):
             epoch_steps += 1
             global_step += 1
 
-            pbar.set_postfix(loss=f"{loss_val:.6f}", lr=f"{lr:.2e}")
+            if accelerator.is_main_process:
+                pbar.set_postfix(loss=f"{loss_val:.6f}", lr=f"{lr:.2e}")
 
-            # Logging
-            if global_step % config["log_every"] == 0:
-                avg_loss = running_loss / config["log_every"]
-                print(f"  Step {global_step}/{total_steps} | loss={avg_loss:.6f} | lr={lr:.2e}")
-                running_loss = 0.0
+                if global_step % config["log_every"] == 0:
+                    avg_loss = running_loss / config["log_every"]
+                    print(f"  Step {global_step}/{total_steps} | loss={avg_loss:.6f} | lr={lr:.2e}")
+                    running_loss = 0.0
 
-            # Save checkpoint
-            if global_step % config["save_every"] == 0:
-                ckpt_path = output_dir / f"adapter_step{global_step}.safetensors"
-                save_adapter(adapter, ckpt_path)
+                if global_step % config["save_every"] == 0:
+                    unwrapped_adapter = accelerator.unwrap_model(adapter)
+                    save_adapter(
+                        unwrapped_adapter,
+                        output_dir / f"adapter_step{global_step}.safetensors",
+                    )
 
-                if loss_val < best_loss:
-                    best_loss = loss_val
-                    save_adapter(adapter, output_dir / "adapter_best.safetensors")
+        if accelerator.is_main_process:
+            avg_epoch_loss = epoch_loss / max(1, epoch_steps)
+            print(f"--- Epoch {epoch+1} Complete | Average Loss: {avg_epoch_loss:.6f} ---")
 
-        avg_epoch_loss = epoch_loss / max(epoch_steps, 1)
-        print(f"Epoch {epoch+1} complete | avg_loss={avg_epoch_loss:.6f}")
+    if accelerator.is_main_process:
+        unwrapped_adapter = accelerator.unwrap_model(adapter)
+        final_adapter_path = output_dir / "adapter_final.safetensors"
+        best_adapter_path = output_dir / "adapter_best.safetensors"
+        save_adapter(unwrapped_adapter, final_adapter_path)
+        save_adapter(unwrapped_adapter, best_adapter_path)
 
-    # Final save
-    save_adapter(adapter, output_dir / "adapter_final.safetensors")
-    print(f"\n=== Training complete ===")
-    print(f"Best loss: {best_loss:.6f}")
-    print(f"Checkpoints saved to: {output_dir}")
+        print(f"\n=== Training Complete ===")
+        print(f"Adapter saved to: {final_adapter_path}")
 
 
 # ---------------------------------------------------------------------------
