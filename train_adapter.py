@@ -111,12 +111,12 @@ class CaptionDataset(Dataset):
 # Hidden state extraction helpers
 # ---------------------------------------------------------------------------
 def extract_hidden_states(
-    model,
+    model: nn.Module,
     tokenizer,
     texts: list[str],
     extract_layers: list[int],
     max_seq_len: int,
-    device: torch.device,
+    device,
     dtype: torch.dtype,
 ) -> list[torch.Tensor]:
     """
@@ -124,13 +124,15 @@ def extract_hidden_states(
 
     Returns a list of tensors, one per layer, each [batch, seq_len, hidden_size].
     """
+    input_device = next(model.parameters()).device if str(device) == "auto" else device
+
     inputs = tokenizer(
         texts,
         return_tensors="pt",
         padding="max_length",
         truncation=True,
         max_length=max_seq_len,
-    ).to(device)
+    ).to(input_device)
 
     with torch.no_grad():
         outputs = model(
@@ -312,7 +314,7 @@ def train(config: dict):
                 config["max_seq_len"],
                 device=device, dtype=dtype,
             )
-            student_hidden = [h.to(torch.float32) for h in student_hidden]
+            student_hidden = [h.to(device=device, dtype=torch.float32) for h in student_hidden]
 
             # Handle potential seq_len mismatch (different tokenizers)
             min_seq = min(teacher_target.shape[1], student_hidden[0].shape[1])
