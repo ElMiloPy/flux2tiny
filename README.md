@@ -18,6 +18,7 @@ Configs live in `configs/*.json`. All scripts accept `--config configs/<name>.js
 | `qwen3.5-4b.json` | `Qwen/Qwen3.5-4B` | 4.0B | 2560 | `[7, 19, 31]` | ~19.7M |
 | `lfm2.5-230m.json` | `LiquidAI/LFM2.5-230M` | 230M | 1024 | `[3, 7, 11]` | ~7.9M |
 | `lfm2.5-350m.json` | `LiquidAI/LFM2.5-350M` | 350M | 1024 | `[4, 8, 12]` | ~7.9M |
+| `gemma3-270m.json` | `google/gemma-3-270m-it` | 270M | 640 | `[5, 11, 17]` | ~4.9M |
 | `smollm2-135m.json` | `HuggingFaceTB/SmolLM2-135M-Instruct` | 135M | 576 | `[8, 15, 23]` | ~4.4M |
 
 ---

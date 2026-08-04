@@ -1,0 +1,14 @@
+{
+  "name": "gemma3-270m",
+  "student_model_id": "google/gemma-3-270m-it",
+  "hidden_size": 640,
+  "extract_layers": [5, 11, 17],
+  "num_layers": 3,
+  "teacher_model_id": "black-forest-labs/FLUX.2-klein-4B",
+  "teacher_hidden_size": 2560,
+  "teacher_extract_layers": [8, 18, 28],
+  "vae_model_id": "black-forest-labs/FLUX.2-small-decoder",
+  "default_adapter_dir": "adapter_checkpoints/gemma3-270m",
+  "default_lora_dir": "lora_checkpoints/gemma3-270m",
+  "description": "Gemma-3-270M-Instruct (270M params, hidden_size=640)"
+}
