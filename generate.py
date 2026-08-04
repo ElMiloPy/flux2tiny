@@ -4,7 +4,7 @@ flux2tiny — Image generation script.
 
 Usage:
   python generate.py "A cat holding a sign that says hello world"
-  python generate.py "A sunset over the ocean" --config qwen3.5-0.8b --steps 4 --seed 42 --size 512x512
+  python generate.py "A sunset over the ocean" --config configs/qwen3.5-0.8b.json --steps 4 --seed 42 --size 512x512
 """
 
 import argparse
@@ -54,13 +54,15 @@ def main():
     # Generator
     generator = None
     if args.seed is not None:
-        generator = torch.Generator(device="cuda").manual_seed(args.seed)
+        generator = torch.Generator(device="cuda" if torch.cuda.is_available() else "cpu").manual_seed(args.seed)
 
     # Load pipeline
     print(f"Preset: {student_cfg.name} ({student_cfg.description})")
     print(f"Prompt: {args.prompt}")
     print(f"Size: {w}x{h}, Steps: {args.steps}, Seed: {args.seed}")
     print()
+
+    dtype = torch.float16 if args.fp16 else None
 
     pipe = Flux2TinyPipeline(
         config=student_cfg,
@@ -70,7 +72,9 @@ def main():
         adapter_path=args.adapter,
         lora_path=args.lora,
         adapter_type=args.adapter_type,
+        dtype=dtype,
         cpu_offload=not args.no_cpu_offload,
+        multi_gpu=args.multi_gpu,
     )
 
     # Generate

@@ -24,7 +24,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from adapter import PerLayerProjection, ConcatProjection, save_adapter, load_adapter
-from config import get_student_config, add_config_argument, StudentConfig
+from config import get_student_config, add_config_argument, StudentConfig, get_default_dtype, get_device_map
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ class ImageCaptionDataset(Dataset):
 # Training Logic
 # ---------------------------------------------------------------------------
 def train_lora(
-    config: str | StudentConfig = "minicpm-1b",
+    config: str | StudentConfig = "configs/minicpm5-1b.json",
     flux_model_id: str | None = None,
     vae_model_id: str | None = None,
     student_model_id: str | None = None,
@@ -172,6 +172,8 @@ def train_lora(
     num_epochs: int = 10,
     learning_rate: float = 1e-4,
     img_size: int = 512,
+    multi_gpu: bool = False,
+    fp16: bool = False,
 ):
     student_cfg = get_student_config(config) if isinstance(config, str) else config
     flux_model_id = flux_model_id or student_cfg.teacher_model_id
@@ -187,13 +189,14 @@ def train_lora(
     output_dir = output_dir or student_cfg.default_lora_dir
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16
+    dtype = torch.float16 if fp16 else get_default_dtype()
+    use_multi_gpu = multi_gpu or (torch.cuda.is_available() and torch.cuda.device_count() > 1)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     print(f"=== Training FLUX.2 LoRA + Adapter (Preset: {student_cfg.name}) ===")
-    print(f"Device: {device}")
-    print(f"Image Size: {img_size}x{img_size}, LoRA Rank: {lora_rank}")
+    print(f"  Device: {device} | Dtype: {dtype} | Multi-GPU Sharding: {use_multi_gpu}")
+    print(f"  Image Size: {img_size}x{img_size}, LoRA Rank: {lora_rank}")
 
     # 1. Load Student Text Encoder — Frozen
     print(f"\nLoading student text encoder: {student_model_id}...")
@@ -232,14 +235,25 @@ def train_lora(
     for p in vae.parameters():
         p.requires_grad = False
 
-    # 4. Load Transformer & Apply PEFT LoRA
+    # 4. Load Transformer & Apply PEFT LoRA (with multi-GPU sharding if available)
     print(f"\nLoading Transformer & applying PEFT LoRA: {flux_model_id}...")
     from diffusers.models import Flux2Transformer2DModel
     from peft import LoraConfig, get_peft_model
 
-    transformer = Flux2Transformer2DModel.from_pretrained(
-        flux_model_id, subfolder="transformer", torch_dtype=dtype
-    ).to(device)
+    transformer_kwargs = {
+        "subfolder": "transformer",
+        "torch_dtype": dtype,
+    }
+    if use_multi_gpu:
+        transformer_kwargs["device_map"] = "balanced"
+
+    transformer = Flux2Transformer2DModel.from_pretrained(flux_model_id, **transformer_kwargs)
+    if not use_multi_gpu:
+        transformer = transformer.to(device)
+
+    # Enable gradient checkpointing to drastically reduce activation VRAM
+    if hasattr(transformer, "enable_gradient_checkpointing"):
+        transformer.enable_gradient_checkpointing()
 
     lora_config = LoraConfig(
         r=lora_rank,
@@ -395,4 +409,6 @@ if __name__ == "__main__":
         learning_rate=args.learning_rate,
         img_size=args.img_size,
         output_dir=args.output_dir,
+        multi_gpu=args.multi_gpu,
+        fp16=args.fp16,
     )

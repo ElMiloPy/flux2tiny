@@ -1,18 +1,45 @@
 """
-flux2tiny — Model Configuration Registry.
+flux2tiny — Model Configuration Registry & Hardware Helpers.
 
 Loads JSON student model configurations directly from `.json` file paths.
+Auto-detects GPU capabilities (e.g. GTX 1080 Pascal fp16 vs. Ampere/Ada bf16)
+and configures multi-GPU layer sharding across available graphics cards.
 """
 
 import json
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Optional
 from pathlib import Path
 import argparse
+import torch
 
 
 CONFIGS_DIR = Path(__file__).parent / "configs"
 DEFAULT_CONFIG_PATH = str(CONFIGS_DIR / "minicpm5-1b.json")
+
+
+def get_default_dtype() -> torch.dtype:
+    """
+    Auto-detect optimal dtype based on GPU architecture.
+    GTX 1080 / Pascal GPUs (Compute Capability < 8.0) do not natively support
+    hardware bfloat16, so we default to float16 (fp16) for performance and compatibility.
+    Ampere / Ada / Hopper GPUs (Compute Capability >= 8.0) use bfloat16.
+    """
+    if torch.cuda.is_available():
+        cap = torch.cuda.get_device_capability(0)
+        if cap[0] < 8:
+            return torch.float16
+    return torch.bfloat16
+
+
+def get_device_map(multi_gpu: bool = False) -> Optional[Union[str, dict]]:
+    """
+    Return 'auto' device_map for model layer sharding across multiple GPUs
+    if multi_gpu is True or if multiple CUDA devices are available.
+    """
+    if multi_gpu or (torch.cuda.is_available() and torch.cuda.device_count() > 1):
+        return "auto"
+    return None
 
 
 @dataclass
@@ -101,10 +128,20 @@ def get_student_config(preset_or_path: str = DEFAULT_CONFIG_PATH) -> StudentConf
 
 
 def add_config_argument(parser: argparse.ArgumentParser):
-    """Utility helper to add --config CLI flag to scripts."""
+    """Utility helper to add --config and hardware CLI flags to scripts."""
     parser.add_argument(
         "--config",
         type=str,
         default=DEFAULT_CONFIG_PATH,
         help=f"Path to student JSON config file (default: {DEFAULT_CONFIG_PATH})",
+    )
+    parser.add_argument(
+        "--multi-gpu",
+        action="store_true",
+        help="Enable multi-GPU layer sharding across all available GPUs (e.g. 2x GTX 1080)",
+    )
+    parser.add_argument(
+        "--fp16",
+        action="store_true",
+        help="Force float16 precision (recommended for GTX 1080 / Pascal GPUs)",
     )

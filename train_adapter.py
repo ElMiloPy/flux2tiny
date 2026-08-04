@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from adapter import PerLayerProjection, ConcatProjection, save_adapter
-from config import get_student_config, add_config_argument
+from config import get_student_config, add_config_argument, get_default_dtype
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,8 @@ def train(config: dict):
     torch.manual_seed(config["seed"])
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.bfloat16
+    dtype = torch.float16 if config.get("fp16", False) else get_default_dtype()
+    use_multi_gpu = config.get("multi_gpu", False) or (torch.cuda.is_available() and torch.cuda.device_count() > 1)
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -177,13 +178,19 @@ def train(config: dict):
     with open(output_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
-    print(f"Device: {device}")
+    print(f"Device: {device} | Dtype: {dtype} | Multi-GPU: {use_multi_gpu}")
     print(f"Output: {output_dir}")
 
     # -----------------------------------------------------------------------
-    # Load teacher (Qwen3-4B) — frozen on GPU (takes ~8GB VRAM)
+    # Load teacher (Qwen3-4B) — frozen on GPU (sharded if multi-GPU)
     # -----------------------------------------------------------------------
-    teacher_device = torch.device("cpu") if config.get("teacher_on_cpu", False) else device
+    if config.get("teacher_on_cpu", False):
+        teacher_device = "cpu"
+    elif use_multi_gpu:
+        teacher_device = "auto"
+    else:
+        teacher_device = device
+
     print(f"\nLoading teacher: {config['teacher_model']} on {teacher_device}...")
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -396,6 +403,8 @@ if __name__ == "__main__":
         "output_dir": output_dir,
         "seed": args.seed,
         "teacher_on_cpu": args.teacher_on_cpu,
+        "multi_gpu": args.multi_gpu,
+        "fp16": args.fp16,
     })
 
     train(config)
