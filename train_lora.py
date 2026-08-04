@@ -1,63 +1,53 @@
 """
-flux2tiny — LoRA Training Script for FLUX.2 Transformer + Adapter
+flux2tiny — LoRA distillation training (Stage 3).
 
-Trains a LoRA adapter on Flux2Transformer2DModel combined with the MiniCPM5-1B
-projection adapter using Flow Matching Loss directly on image-text pairs.
+Jointly trains a PEFT LoRA on the FLUX.2 Transformer + the projection adapter
+using Flow Matching Loss on teacher latents (from Stage 2) or real images.
 
-This teaches the FLUX.2 transformer backbone how to interpret MiniCPM5-1B's
-projected embeddings, producing coherent, high-quality images.
+Usage:
+  python train_lora.py --config configs/minicpm5-1b.json --synthetic-dir synthetic_sd_15k
+  accelerate launch --multi_gpu train_lora.py --config configs/lfm2.5-230m.json --synthetic-dir synthetic_sd_15k
 """
 
 import argparse
 import json
-import math
-import os
 import time
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from tqdm import tqdm
+from accelerate import Accelerator
 
-from adapter import PerLayerProjection, ConcatProjection, save_adapter, load_adapter
-from config import get_student_config, add_config_argument, StudentConfig, get_default_dtype, get_device_map
+from adapter import save_adapter, load_adapter
+from config import get_student_config, add_config_argument, StudentConfig, get_default_dtype
 
 
 # ---------------------------------------------------------------------------
-# Synthetic / Downloaded Image-Caption Dataset
+# Dataset
 # ---------------------------------------------------------------------------
+DEFAULT_PROMPTS = [
+    "a vibrant red circle on a dark background",
+    "a bright blue square centered on a white canvas",
+    "a yellow star shining in a night sky",
+    "a green leaf with detailed veins",
+    "a colorful rainbow gradient across the screen",
+    "a orange sunset over a black ocean horizon",
+    "a purple sphere floating in space",
+    "a geometric pattern of cyan and magenta triangles",
+    "a golden retriever puppy sitting happily",
+    "a cute fluffy cat looking at the camera",
+]
+
+
 class ImageCaptionDataset(Dataset):
-    """
-    Dataset of image-caption pairs for Flow Matching training.
-    If image_dir exists, loads local images + captions.
-    Otherwise generates synthetic training patterns with descriptive prompts.
-    """
+    """Loads synthetic latents, HF datasets, local images, or generates synthetic patterns."""
 
-    DEFAULT_PROMPTS = [
-        "a vibrant red circle on a dark background",
-        "a bright blue square centered on a white canvas",
-        "a yellow star shining in a night sky",
-        "a green leaf with detailed veins",
-        "a colorful rainbow gradient across the screen",
-        "a orange sunset over a black ocean horizon",
-        "a purple sphere floating in space",
-        "a geometric pattern of cyan and magenta triangles",
-        "a golden retriever puppy sitting happily",
-        "a cute fluffy cat looking at the camera",
-    ]
-
-    def __init__(
-        self,
-        image_dir: str | None = None,
-        hf_dataset: str | None = None,
-        synthetic_dir: str | None = None,
-        img_size: int = 512,
-        num_samples: int = 200,
-    ):
+    def __init__(self, image_dir=None, hf_dataset=None, synthetic_dir=None,
+                 img_size=512, num_samples=200):
         self.img_size = img_size
         self.samples = []
         self.hf_data = None
@@ -67,63 +57,42 @@ class ImageCaptionDataset(Dataset):
         self.transform = transforms.Compose([
             transforms.Resize((img_size, img_size)),
             transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),  # [-1, 1] range for VAE
+            transforms.Normalize([0.5], [0.5]),
         ])
 
         if synthetic_dir and Path(synthetic_dir).exists():
-            syn_path = Path(synthetic_dir)
-            manifest_file = syn_path / "manifest.json"
+            manifest_file = Path(synthetic_dir) / "manifest.json"
             if manifest_file.exists():
-                with open(manifest_file, "r") as f:
+                with open(manifest_file) as f:
                     self.synthetic_manifest = json.load(f)
-                self.synthetic_dir = syn_path
+                self.synthetic_dir = Path(synthetic_dir)
                 print(f"Loaded {len(self.synthetic_manifest)} synthetic latents from {synthetic_dir}")
+                return
 
-        elif hf_dataset:
+        if hf_dataset:
             from datasets import load_dataset
-            print(f"Loading Hugging Face dataset: {hf_dataset}...")
+            print(f"Loading HF dataset: {hf_dataset}...")
             self.hf_data = load_dataset(hf_dataset, split="train")
-            print(f"Loaded {len(self.hf_data)} samples from {hf_dataset}")
+            print(f"Loaded {len(self.hf_data)} samples")
+            return
 
-        elif image_dir and Path(image_dir).exists():
-            image_path = Path(image_dir)
-            valid_exts = {".png", ".jpg", ".jpeg", ".webp"}
-            for p in image_path.iterdir():
-                if p.suffix.lower() in valid_exts:
-                    txt_path = p.with_suffix(".txt")
-                    caption = txt_path.read_text().strip() if txt_path.exists() else p.stem.replace("_", " ")
+        if image_dir and Path(image_dir).exists():
+            for p in Path(image_dir).iterdir():
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                    txt = p.with_suffix(".txt")
+                    caption = txt.read_text().strip() if txt.exists() else p.stem.replace("_", " ")
                     self.samples.append((str(p), caption))
             print(f"Loaded {len(self.samples)} image-caption pairs from {image_dir}")
+            return
 
-        if not self.synthetic_dir and not self.hf_data and not self.samples:
-            print(f"Generating {num_samples} synthetic training samples...")
-            self.synthetic_data = []
-            for i in range(num_samples):
-                prompt = self.DEFAULT_PROMPTS[i % len(self.DEFAULT_PROMPTS)]
-                # Create distinct synthetic color image
-                img = self._create_synthetic_image(i, img_size)
-                self.synthetic_data.append((img, prompt))
-
-    def _create_synthetic_image(self, index: int, size: int) -> Image.Image:
+        # Fallback: synthetic color patterns
+        print(f"Generating {num_samples} synthetic training samples...")
         import numpy as np
-        arr = np.zeros((size, size, 3), dtype=np.uint8)
-        color_idx = index % 5
-        if color_idx == 0:
-            arr[:, :, 0] = 220  # Red gradient
-            arr[:, :, 1] = np.linspace(0, 200, size, dtype=np.uint8)
-        elif color_idx == 1:
-            arr[:, :, 2] = 240  # Blue gradient
-            arr[:, :, 0] = np.linspace(0, 150, size, dtype=np.uint8)[:, None]
-        elif color_idx == 2:
-            arr[:, :, 0] = 240  # Yellow/Green
-            arr[:, :, 1] = 220
-        elif color_idx == 3:
-            arr[:, :, 1] = 200  # Green
-            arr[:, :, 2] = 180
-        else:
-            arr[:, :, 0] = 200  # Purple/Magenta
-            arr[:, :, 2] = 220
-        return Image.fromarray(arr)
+        self.synthetic_data = []
+        for i in range(num_samples):
+            arr = np.random.randint(50, 230, (img_size, img_size, 3), dtype=np.uint8)
+            img = Image.fromarray(arr)
+            self.synthetic_data.append((img, DEFAULT_PROMPTS[i % len(DEFAULT_PROMPTS)]))
 
     def __len__(self):
         if self.synthetic_dir:
@@ -139,22 +108,22 @@ class ImageCaptionDataset(Dataset):
             item = self.synthetic_manifest[idx]
             latent = torch.load(self.synthetic_dir / item["latent_file"], map_location="cpu")
             return {"latent": latent, "caption": item["prompt"]}
-        elif self.hf_data is not None:
+
+        if self.hf_data is not None:
             item = self.hf_data[idx]
             img = item["image"].convert("RGB")
             caption = item.get("text", item.get("caption", "a photo"))
         elif self.samples:
-            img_path, caption = self.samples[idx]
-            img = Image.open(img_path).convert("RGB")
+            path, caption = self.samples[idx]
+            img = Image.open(path).convert("RGB")
         else:
             img, caption = self.synthetic_data[idx]
 
-        pixel_values = self.transform(img)
-        return {"pixel_values": pixel_values, "caption": caption}
+        return {"pixel_values": self.transform(img), "caption": caption}
 
 
 # ---------------------------------------------------------------------------
-# Training Logic
+# Training
 # ---------------------------------------------------------------------------
 def train_lora(
     config: str | StudentConfig = "configs/minicpm5-1b.json",
@@ -172,9 +141,12 @@ def train_lora(
     num_epochs: int = 10,
     learning_rate: float = 1e-4,
     img_size: int = 512,
-    multi_gpu: bool = False,
     fp16: bool = False,
 ):
+    accelerator = Accelerator(mixed_precision="fp16" if fp16 else "no")
+    device = accelerator.device
+    dtype = torch.float16 if fp16 else get_default_dtype()
+
     student_cfg = get_student_config(config) if isinstance(config, str) else config
     flux_model_id = flux_model_id or student_cfg.teacher_model_id
     vae_model_id = vae_model_id or student_cfg.vae_model_id
@@ -187,20 +159,17 @@ def train_lora(
             adapter_path = student_cfg.get_adapter_path("adapter_final.safetensors")
 
     output_dir = output_dir or student_cfg.default_lora_dir
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float16 if fp16 else get_default_dtype()
-    use_multi_gpu = multi_gpu or (torch.cuda.is_available() and torch.cuda.device_count() > 1)
     output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
 
-    print(f"=== Training FLUX.2 LoRA + Adapter (Preset: {student_cfg.name}) ===")
-    print(f"  Device: {device} | Dtype: {dtype} | Multi-GPU Sharding: {use_multi_gpu}")
-    print(f"  Image Size: {img_size}x{img_size}, LoRA Rank: {lora_rank}")
+    if accelerator.is_main_process:
+        output_path.mkdir(parents=True, exist_ok=True)
+        print(f"=== Training FLUX.2 LoRA + Adapter ({student_cfg.name}) ===")
+        print(f"  Device: {device} | Dtype: {dtype} | Processes: {accelerator.num_processes}")
+        print(f"  Image: {img_size}x{img_size} | LoRA rank: {lora_rank}")
 
-    # 1. Load Student Text Encoder — Frozen
-    print(f"\nLoading student text encoder: {student_model_id}...")
+    # 1. Student text encoder — frozen
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
     tokenizer = AutoTokenizer.from_pretrained(student_model_id, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -212,93 +181,95 @@ def train_lora(
     for p in text_encoder.parameters():
         p.requires_grad = False
 
-    # 2. Load Adapter — Trainable
-    print(f"\nLoading adapter from {adapter_path}...")
+    # 2. Adapter — trainable
+    if accelerator.is_main_process:
+        print(f"  Adapter: {adapter_path}")
+
     adapter = load_adapter(
-        adapter_path,
-        adapter_type="per_layer",
+        adapter_path, adapter_type="per_layer",
         source_dim=student_cfg.hidden_size,
         target_dim=student_cfg.teacher_hidden_size,
         num_layers=student_cfg.num_layers,
-        device=str(device),
-        dtype=dtype,
+        device=str(device), dtype=dtype,
     )
     adapter.train()
     for p in adapter.parameters():
         p.requires_grad = True
 
-    # 3. Load VAE — Frozen
-    print(f"\nLoading VAE: {vae_model_id}...")
+    # 3. VAE — frozen
     from diffusers import AutoencoderKLFlux2
+
     vae = AutoencoderKLFlux2.from_pretrained(vae_model_id, torch_dtype=dtype).to(device)
     vae.eval()
     for p in vae.parameters():
         p.requires_grad = False
 
-    # 4. Load Transformer & Apply PEFT LoRA (with multi-GPU sharding if available)
-    print(f"\nLoading Transformer & applying PEFT LoRA: {flux_model_id}...")
+    # 4. Transformer + LoRA
     from diffusers.models import Flux2Transformer2DModel
     from peft import LoraConfig, get_peft_model
 
-    transformer_kwargs = {
-        "subfolder": "transformer",
-        "torch_dtype": dtype,
-    }
-    if use_multi_gpu:
-        transformer_kwargs["device_map"] = "balanced"
+    transformer = Flux2Transformer2DModel.from_pretrained(
+        flux_model_id, subfolder="transformer", torch_dtype=dtype
+    ).to(device)
 
-    transformer = Flux2Transformer2DModel.from_pretrained(flux_model_id, **transformer_kwargs)
-    if not use_multi_gpu:
-        transformer = transformer.to(device)
-
-    # Enable gradient checkpointing to drastically reduce activation VRAM
+    # Gradient checkpointing BEFORE wrapping with PEFT
     if hasattr(transformer, "enable_gradient_checkpointing"):
         transformer.enable_gradient_checkpointing()
 
     lora_config = LoraConfig(
-        r=lora_rank,
-        lora_alpha=lora_alpha,
+        r=lora_rank, lora_alpha=lora_alpha,
         init_lora_weights="gaussian",
         target_modules=["to_q", "to_k", "to_v", "to_out.0"],
     )
     transformer = get_peft_model(transformer, lora_config)
-    transformer.print_trainable_parameters()
 
-    # 5. Dataset and Dataloader
-    dataset = ImageCaptionDataset(image_dir=image_dir, hf_dataset=hf_dataset, synthetic_dir=synthetic_dir, img_size=img_size, num_samples=200)
+    if accelerator.is_main_process:
+        transformer.print_trainable_parameters()
+
+    # 5. Dataset
+    dataset = ImageCaptionDataset(
+        image_dir=image_dir, hf_dataset=hf_dataset,
+        synthetic_dir=synthetic_dir, img_size=img_size, num_samples=200,
+    )
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    # 6. Optimizer (Adapter + LoRA parameters)
+    # 6. Optimizer
     trainable_params = list(adapter.parameters()) + list(transformer.parameters())
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=0.01)
 
+    # Prepare with Accelerator
+    adapter, transformer, optimizer, dataloader = accelerator.prepare(
+        adapter, transformer, optimizer, dataloader
+    )
+
     total_steps = len(dataloader) * num_epochs
-    print(f"\nTotal training steps: {total_steps}")
-    print("=== Starting Flow Matching Training ===")
+    if accelerator.is_main_process:
+        print(f"  Dataset: {len(dataset)} samples | Steps: {total_steps}\n")
 
     global_step = 0
     start_time = time.time()
 
     for epoch in range(num_epochs):
         epoch_loss = 0.0
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}",
+                    disable=not accelerator.is_main_process)
 
         for batch in pbar:
             captions = batch["caption"]
 
-            # Encode Text Prompt via MiniCPM5-1B + Adapter
+            # Encode text → prompt_embeds
             inputs = tokenizer(
                 captions, return_tensors="pt", padding="max_length",
-                truncation=True, max_length=128
+                truncation=True, max_length=128,
             ).to(device)
 
             with torch.no_grad():
                 outputs = text_encoder(**inputs, output_hidden_states=True, return_dict=True)
-                hidden_states_list = [outputs.hidden_states[idx + 1] for idx in student_extract_layers]
+                hidden_list = [outputs.hidden_states[i + 1] for i in student_extract_layers]
 
-            prompt_embeds = adapter(hidden_states_list)  # [B, 128, 7680]
+            prompt_embeds = adapter(hidden_list)  # [B, 128, 7680]
 
-            # Latents: from pre-encoded synthetic batch or VAE encoding
+            # Latents
             if "latent" in batch:
                 latents_0 = batch["latent"].to(device=device, dtype=dtype)
                 if latents_0.ndim == 3:
@@ -308,94 +279,95 @@ def train_lora(
                 with torch.no_grad():
                     latents_0 = vae.encode(pixel_values).latent_dist.sample()
 
-            # Helper functions for FLUX.2 packing
+            # Pack latents for FLUX.2
             B, C, H, W = latents_0.shape
-            def pack_latents(l_tensor):
-                x = l_tensor.view(B, C, H // 2, 2, W // 2, 2)
-                return x.permute(0, 1, 3, 5, 2, 4).reshape(B, C * 4, (H // 2) * (W // 2)).permute(0, 2, 1)
 
-            latents_0_packed = pack_latents(latents_0)  # [B, 1024, 128]
+            def pack(tensor):
+                x = tensor.view(B, C, H // 2, 2, W // 2, 2)
+                return x.permute(0, 1, 3, 5, 2, 4).reshape(B, C * 4, -1).permute(0, 2, 1)
 
-            # Sample random timesteps t in (0, 1) and random noise
-            batch_size_cur = B
-            t = torch.rand((batch_size_cur,), device=device, dtype=dtype)
-            noise_0 = torch.randn_like(latents_0)
-            noise_packed = pack_latents(noise_0)
+            latents_packed = pack(latents_0)
 
-            # Flow Matching interpolation on packed latents: z_t = (1 - t) * z_0 + t * noise
-            t_expand = t.view(batch_size_cur, 1, 1)
-            latents_t_packed = (1.0 - t_expand) * latents_0_packed + t_expand * noise_packed
+            # Flow Matching: sample t, interpolate, compute target
+            t = torch.rand(B, device=device, dtype=dtype)
+            noise = pack(torch.randn_like(latents_0))
+            t_exp = t.view(B, 1, 1)
 
-            # Target velocity for Flow Matching: v = noise - latents_0
-            target_velocity = noise_packed - latents_0_packed
+            latents_t = (1.0 - t_exp) * latents_packed + t_exp * noise
+            target_velocity = noise - latents_packed
 
-            # Position IDs (4D: T, H, W, L)
+            # Position IDs
             h_ids, w_ids = H // 2, W // 2
             grid = torch.cartesian_prod(
                 torch.arange(1, device=device),
                 torch.arange(h_ids, device=device),
                 torch.arange(w_ids, device=device),
-                torch.arange(1, device=device)
+                torch.arange(1, device=device),
             ).to(dtype)
-            img_ids = grid.unsqueeze(0).expand(batch_size_cur, -1, -1)  # [B, 1024, 4]
-            txt_ids = torch.zeros(batch_size_cur, prompt_embeds.shape[1], 4, device=device, dtype=dtype)
+            img_ids = grid.unsqueeze(0).expand(B, -1, -1)
+            txt_ids = torch.zeros(B, prompt_embeds.shape[1], 4, device=device, dtype=dtype)
 
-            # Predict velocity with LoRA transformer
-            pred_velocity = transformer(
-                hidden_states=latents_t_packed,
-                timestep=t,
+            # Predict velocity
+            pred = transformer(
+                hidden_states=latents_t, timestep=t,
                 encoder_hidden_states=prompt_embeds,
-                txt_ids=txt_ids,
-                img_ids=img_ids,
+                txt_ids=txt_ids, img_ids=img_ids,
                 return_dict=False,
             )[0]
 
-            # Compute Flow Matching Loss
-            loss = F.mse_loss(pred_velocity.float(), target_velocity.float())
+            loss = F.mse_loss(pred.float(), target_velocity.float())
 
             optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+            accelerator.backward(loss)
+            if accelerator.sync_gradients:
+                accelerator.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()
 
             loss_val = loss.item()
             epoch_loss += loss_val
             global_step += 1
 
-            pbar.set_postfix(loss=f"{loss_val:.4f}")
+            if accelerator.is_main_process:
+                pbar.set_postfix(loss=f"{loss_val:.4f}")
 
-        avg_loss = epoch_loss / len(dataloader)
-        print(f"Epoch {epoch+1} Complete | Avg Loss: {avg_loss:.4f}")
+        if accelerator.is_main_process:
+            avg = epoch_loss / len(dataloader)
+            print(f"Epoch {epoch+1} | Avg Loss: {avg:.4f}")
 
-        # Save checkpoint per epoch
-        ckpt_dir = output_path / f"epoch_{epoch+1}"
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-        transformer.save_pretrained(ckpt_dir / "transformer_lora")
-        save_adapter(adapter, ckpt_dir / "adapter.safetensors")
+            # Save checkpoint
+            ckpt_dir = output_path / f"epoch_{epoch+1}"
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            unwrapped_transformer = accelerator.unwrap_model(transformer)
+            unwrapped_transformer.save_pretrained(ckpt_dir / "transformer_lora")
+            save_adapter(accelerator.unwrap_model(adapter), ckpt_dir / "adapter.safetensors")
 
-    # Save final
-    final_dir = output_path / "final"
-    final_dir.mkdir(parents=True, exist_ok=True)
-    transformer.save_pretrained(final_dir / "transformer_lora")
-    save_adapter(adapter, final_dir / "adapter.safetensors")
+    # Final save
+    if accelerator.is_main_process:
+        final_dir = output_path / "final"
+        final_dir.mkdir(parents=True, exist_ok=True)
+        accelerator.unwrap_model(transformer).save_pretrained(final_dir / "transformer_lora")
+        save_adapter(accelerator.unwrap_model(adapter), final_dir / "adapter.safetensors")
 
-    elapsed = time.time() - start_time
-    print(f"\n=== Training Completed in {elapsed/60:.2f} mins ===")
-    print(f"LoRA & Adapter saved to: {final_dir}")
+        elapsed = time.time() - start_time
+        print(f"\n=== Training Complete ({elapsed/60:.1f} min) ===")
+        print(f"Saved to: {final_dir}")
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train FLUX.2 LoRA + Adapter")
+    parser = argparse.ArgumentParser(description="Train FLUX.2 LoRA + Adapter (Stage 3)")
     add_config_argument(parser)
-    parser.add_argument("--adapter-path", type=str, default=None, help="Path to pre-trained adapter weights")
-    parser.add_argument("--image-dir", type=str, default=None, help="Directory of training images + text captions")
-    parser.add_argument("--hf-dataset", type=str, default=None, help="Hugging Face dataset name (e.g. jpawan33/kag100-image-captioning-dataset)")
-    parser.add_argument("--synthetic-dir", type=str, default=None, help="Directory of synthetic teacher latents")
+    parser.add_argument("--adapter-path", type=str, default=None)
+    parser.add_argument("--image-dir", type=str, default=None)
+    parser.add_argument("--hf-dataset", type=str, default=None)
+    parser.add_argument("--synthetic-dir", type=str, default=None)
     parser.add_argument("--num-epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--img-size", type=int, default=512)
-    parser.add_argument("--output-dir", type=str, default=None, help="Output directory for LoRA checkpoints")
+    parser.add_argument("--output-dir", type=str, default=None)
     args = parser.parse_args()
 
     train_lora(
@@ -409,6 +381,5 @@ if __name__ == "__main__":
         learning_rate=args.learning_rate,
         img_size=args.img_size,
         output_dir=args.output_dir,
-        multi_gpu=args.multi_gpu,
         fp16=args.fp16,
     )

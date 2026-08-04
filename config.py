@@ -1,45 +1,27 @@
 """
-flux2tiny — Model Configuration Registry & Hardware Helpers.
+flux2tiny — Model configuration & hardware helpers.
 
-Loads JSON student model configurations directly from `.json` file paths.
-Auto-detects GPU capabilities (e.g. GTX 1080 Pascal fp16 vs. Ampere/Ada bf16)
-and configures multi-GPU layer sharding across available graphics cards.
+Loads student model configs from JSON files in configs/.
+Auto-detects GPU dtype (fp16 for Pascal / bf16 for Ampere+).
 """
 
 import json
-from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Union, Optional
-from pathlib import Path
 import argparse
+from dataclasses import dataclass, field, asdict
+from typing import List, Union
+from pathlib import Path
+
 import torch
 
-
 CONFIGS_DIR = Path(__file__).parent / "configs"
-DEFAULT_CONFIG_PATH = str(CONFIGS_DIR / "minicpm5-1b.json")
+DEFAULT_CONFIG = str(CONFIGS_DIR / "minicpm5-1b.json")
 
 
 def get_default_dtype() -> torch.dtype:
-    """
-    Auto-detect optimal dtype based on GPU architecture.
-    GTX 1080 / Pascal GPUs (Compute Capability < 8.0) do not natively support
-    hardware bfloat16, so we default to float16 (fp16) for performance and compatibility.
-    Ampere / Ada / Hopper GPUs (Compute Capability >= 8.0) use bfloat16.
-    """
-    if torch.cuda.is_available():
-        cap = torch.cuda.get_device_capability(0)
-        if cap[0] < 8:
-            return torch.float16
+    """Auto-detect: fp16 for Pascal (GTX 1080), bf16 for Ampere+."""
+    if torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] < 8:
+        return torch.float16
     return torch.bfloat16
-
-
-def get_device_map(multi_gpu: bool = False) -> Optional[Union[str, dict]]:
-    """
-    Return 'auto' device_map for model layer sharding across multiple GPUs
-    if multi_gpu is True or if multiple CUDA devices are available.
-    """
-    if multi_gpu or (torch.cuda.is_available() and torch.cuda.device_count() > 1):
-        return "auto"
-    return None
 
 
 @dataclass
@@ -58,90 +40,56 @@ class StudentConfig:
     description: str = ""
 
     @property
-    def total_source_dim(self) -> int:
-        """Total dimension of concatenated extracted student layers."""
-        return self.hidden_size * self.num_layers
-
-    @property
     def total_target_dim(self) -> int:
-        """Total target joint attention dimension expected by FLUX.2 (7680)."""
+        """joint_attention_dim expected by FLUX.2 (3 × 2560 = 7680)."""
         return self.teacher_hidden_size * len(self.teacher_extract_layers)
 
-    def get_adapter_path(self, checkpoint: str = "adapter_best.safetensors") -> str:
-        """Get adapter path with fallback to root adapter_checkpoints/."""
-        p1 = Path(self.default_adapter_dir) / checkpoint
-        if p1.exists():
-            return str(p1)
-        p2 = Path("adapter_checkpoints") / checkpoint
-        if p2.exists():
-            return str(p2)
-        return str(p1)
+    def get_adapter_path(self, filename: str = "adapter_best.safetensors") -> str:
+        p = Path(self.default_adapter_dir) / filename
+        if p.exists():
+            return str(p)
+        fallback = Path("adapter_checkpoints") / filename
+        return str(fallback if fallback.exists() else p)
 
-    def get_lora_path(self, checkpoint: str = "final/transformer_lora") -> str:
-        """Get LoRA path with fallback to root lora_checkpoints/."""
-        p1 = Path(self.default_lora_dir) / checkpoint
-        if p1.exists():
-            return str(p1)
-        p2 = Path("lora_checkpoints") / checkpoint
-        if p2.exists():
-            return str(p2)
-        return str(p1)
+    def get_lora_path(self, filename: str = "final/transformer_lora") -> str:
+        p = Path(self.default_lora_dir) / filename
+        if p.exists():
+            return str(p)
+        fallback = Path("lora_checkpoints") / filename
+        return str(fallback if fallback.exists() else p)
 
     @classmethod
-    def from_json(cls, json_path: Union[str, Path]) -> "StudentConfig":
-        """Load StudentConfig from a JSON file."""
-        path = Path(json_path)
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return cls(**data)
+    def from_json(cls, path: Union[str, Path]) -> "StudentConfig":
+        with open(path, "r") as f:
+            return cls(**json.load(f))
 
-    def to_json(self, json_path: Union[str, Path]):
-        """Save StudentConfig to a JSON file."""
-        path = Path(json_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+    def to_json(self, path: Union[str, Path]):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
             json.dump(asdict(self), f, indent=2)
 
 
-def get_student_config(preset_or_path: str = DEFAULT_CONFIG_PATH) -> StudentConfig:
-    """
-    Retrieve a StudentConfig by JSON file path or name in configs/.
-    """
-    path_obj = Path(preset_or_path)
+def get_student_config(name_or_path: str = DEFAULT_CONFIG) -> StudentConfig:
+    """Load a StudentConfig from a JSON path or config name."""
+    p = Path(name_or_path)
 
-    # 1. Direct path to existing JSON file
-    if path_obj.exists() and path_obj.is_file():
-        return StudentConfig.from_json(path_obj)
+    # Direct path
+    if p.exists() and p.is_file():
+        return StudentConfig.from_json(p)
 
-    # 2. Check under configs/ directory
-    if not preset_or_path.endswith(".json"):
-        candidate = CONFIGS_DIR / f"{preset_or_path}.json"
-    else:
-        candidate = CONFIGS_DIR / path_obj.name
-
+    # Lookup in configs/
+    candidate = CONFIGS_DIR / (f"{name_or_path}.json" if not name_or_path.endswith(".json") else p.name)
     if candidate.exists():
         return StudentConfig.from_json(candidate)
 
-    raise FileNotFoundError(
-        f"Config file not found at '{preset_or_path}' or '{candidate}'."
-    )
+    raise FileNotFoundError(f"Config not found: '{name_or_path}' or '{candidate}'")
 
 
 def add_config_argument(parser: argparse.ArgumentParser):
-    """Utility helper to add --config and hardware CLI flags to scripts."""
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=DEFAULT_CONFIG_PATH,
-        help=f"Path to student JSON config file (default: {DEFAULT_CONFIG_PATH})",
-    )
-    parser.add_argument(
-        "--multi-gpu",
-        action="store_true",
-        help="Enable multi-GPU layer sharding across all available GPUs (e.g. 2x GTX 1080)",
-    )
-    parser.add_argument(
-        "--fp16",
-        action="store_true",
-        help="Force float16 precision (recommended for GTX 1080 / Pascal GPUs)",
-    )
+    """Add --config, --multi-gpu, --fp16 CLI flags."""
+    parser.add_argument("--config", type=str, default=DEFAULT_CONFIG,
+                        help=f"Path to student JSON config (default: {DEFAULT_CONFIG})")
+    parser.add_argument("--multi-gpu", action="store_true",
+                        help="Enable multi-GPU (accelerate launch or device_map sharding)")
+    parser.add_argument("--fp16", action="store_true",
+                        help="Force float16 (auto-detected for Pascal GPUs)")
