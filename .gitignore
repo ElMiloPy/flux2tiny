@@ -14,6 +14,7 @@ ENV/
 /opt/miniconda/
 
 # Large Datasets & Synthetic Latents
+synthetic_*/
 synthetic_sd_15k/
 synthetic_dataset/
 test_synthetic/
@@ -24,7 +25,7 @@ my_dataset/
 # Model Weights & Checkpoints (store on HF Hub or release assets)
 adapter_checkpoints/
 lora_checkpoints/
-lora_checkpoints_15k/
+*_checkpoints/
 *.safetensors
 *.bin
 *.onnx
