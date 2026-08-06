@@ -193,6 +193,18 @@ def train(config: dict):
     if accelerator.is_main_process:
         print(f"Dataset: {len(dataset)} captions | Steps: {total_steps}\n")
 
+    # --- Auto-resume from latest checkpoint ---
+    start_step = 0
+    from safetensors.torch import load_file
+    step_ckpts = list(output_dir.glob("adapter_step*.safetensors"))
+    if step_ckpts:
+        latest_ckpt = max(step_ckpts, key=lambda p: int(p.stem.replace("adapter_step", "")))
+        start_step = int(latest_ckpt.stem.replace("adapter_step", ""))
+        state_dict = load_file(str(latest_ckpt))
+        accelerator.unwrap_model(adapter).load_state_dict(state_dict)
+        if accelerator.is_main_process:
+            print(f"--> Auto-resuming training from step {start_step} ({latest_ckpt.name})")
+
     # --- Training loop ---
     global_step = 0
     running_loss = 0.0
@@ -204,6 +216,10 @@ def train(config: dict):
                     disable=not accelerator.is_main_process)
 
         for batch_texts in pbar:
+            if global_step < start_step:
+                global_step += 1
+                continue
+
             lr = cosine_lr(global_step, warmup, total_steps, config["learning_rate"])
             for pg in optimizer.param_groups:
                 pg["lr"] = lr

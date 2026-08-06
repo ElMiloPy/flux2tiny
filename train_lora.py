@@ -242,14 +242,22 @@ def train_lora(
         adapter, transformer, optimizer, dataloader
     )
 
-    total_steps = len(dataloader) * num_epochs
-    if accelerator.is_main_process:
-        print(f"  Dataset: {len(dataset)} samples | Steps: {total_steps}\n")
+    # Auto-resume from latest epoch checkpoint
+    start_epoch = 0
+    from safetensors.torch import load_file
+    epoch_dirs = [d for d in output_path.glob("epoch_*") if d.is_dir() and (d / "adapter.safetensors").exists()]
+    if epoch_dirs:
+        latest_dir = max(epoch_dirs, key=lambda d: int(d.name.replace("epoch_", "")))
+        start_epoch = int(latest_dir.name.replace("epoch_", ""))
+        adapter_state = load_file(str(latest_dir / "adapter.safetensors"))
+        accelerator.unwrap_model(adapter).load_state_dict(adapter_state)
+        if accelerator.is_main_process:
+            print(f"--> Auto-resuming LoRA training from epoch {start_epoch} ({latest_dir.name})")
 
-    global_step = 0
+    global_step = start_epoch * len(dataloader)
     start_time = time.time()
 
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         epoch_loss = 0.0
         pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}",
                     disable=not accelerator.is_main_process)
