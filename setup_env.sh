@@ -21,7 +21,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 # Install core pip packages
 echo "Installing pip dependencies..."
-pip install accelerate safetensors peft Pillow tqdm datasets
+pip install accelerate safetensors peft Pillow tqdm datasets bitsandbytes
 
 # Bleeding-edge diffusers (required for Flux2KleinPipeline)
 echo "Installing diffusers from git (for Flux2KleinPipeline)..."

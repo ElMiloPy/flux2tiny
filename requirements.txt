@@ -10,3 +10,4 @@ huggingface_hub>=0.20.0
 Pillow>=10.0.0
 tqdm>=4.65.0
 datasets>=2.14.0
+bitsandbytes>=0.45.0
