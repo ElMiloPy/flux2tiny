@@ -86,10 +86,8 @@ def get_student_config(name_or_path: str = DEFAULT_CONFIG) -> StudentConfig:
 
 
 def add_config_argument(parser: argparse.ArgumentParser):
-    """Add --config, --multi-gpu, --fp16 CLI flags."""
+    """Add --config, --fp16 CLI flags."""
     parser.add_argument("--config", type=str, default=DEFAULT_CONFIG,
                         help=f"Path to student JSON config (default: {DEFAULT_CONFIG})")
-    parser.add_argument("--multi-gpu", action="store_true",
-                        help="Enable multi-GPU (accelerate launch or device_map sharding)")
     parser.add_argument("--fp16", action="store_true",
                         help="Force float16 (auto-detected for Pascal GPUs)")

@@ -88,29 +88,6 @@ python upload_to_hub.py --config configs/minicpm5-1b.json --repo-id Emilio407/fl
 
 ---
 
-## Multi-GPU Support (e.g. 2× GTX 1080)
-
-flux2tiny supports **parallel multi-GPU training** via [Hugging Face Accelerate](https://huggingface.co/docs/accelerate). On a system with 2× GTX 1080 (8GB each = 16GB total):
-
-```bash
-# Stage 1: Adapter training across both GPUs
-accelerate launch --multi_gpu train_adapter.py --config configs/lfm2.5-230m.json --num-epochs 10
-
-# Stage 3: LoRA distillation across both GPUs
-accelerate launch --multi_gpu train_lora.py --config configs/minicpm5-1b.json --synthetic-dir synthetic_sd_15k
-```
-
-**Auto-detected features:**
-- **fp16 precision** for Pascal GPUs (GTX 1080) — bf16 for Ampere+ (RTX 3000/4000/A-series)
-- **Data-parallel training** — both GPUs process batches simultaneously at 100% utilization
-
-For inference with multi-GPU:
-```bash
-python generate.py "A sunset" --config configs/minicpm5-1b.json --multi-gpu
-```
-
----
-
 ## Repository Structure
 
 ```
@@ -119,6 +96,7 @@ flux2tiny/
 │   ├── minicpm5-1b.json
 │   ├── qwen3.5-{0.8b,2b,4b}.json
 │   ├── lfm2.5-{230m,350m}.json
+│   ├── gemma3-270m.json
 │   └── smollm2-135m.json
 ├── config.py                         # Config loader & hardware helpers
 ├── adapter.py                        # Projection adapter module
@@ -139,14 +117,12 @@ flux2tiny/
 
 ## Hardware Requirements
 
-| Stage | Script | Peak VRAM | Notes |
-|:------|:-------|:----------|:------|
-| 1. Adapter | `train_adapter.py` | ~12 GB | Single GPU or `accelerate launch --multi_gpu` |
-| 2. Latents | `generate_synthetic_dataset.py` | ~12 GB | Single GPU |
-| 3. LoRA | `train_lora.py` | ~10 GB | Single GPU or `accelerate launch --multi_gpu` |
-| Inference | `generate.py` | ~10 GB | Supports `--multi-gpu` flag |
-
-Tested on NVIDIA RTX A4500 (16 GB) and 2× GTX 1080 (8 GB each).
+| Stage | Script | Peak VRAM |
+|:------|:-------|:----------|
+| 1. Adapter | `train_adapter.py` | ~12 GB (or ~2.5 GB with `unsloth/Qwen3-4B-bnb-4bit`) |
+| 2. Latents | `generate_synthetic_dataset.py` | ~12 GB |
+| 3. LoRA | `train_lora.py` | ~10 GB |
+| Inference | `generate.py` | ~4 GB (with CPU offload) |
 
 ---
 

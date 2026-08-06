@@ -39,13 +39,11 @@ class Flux2TinyPipeline:
         device: str = "cuda",
         dtype: Optional[torch.dtype] = None,
         cpu_offload: bool = True,
-        multi_gpu: bool = False,
     ):
         self.student_config = get_student_config(config) if isinstance(config, str) else config
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.dtype = dtype or get_default_dtype()
         self.cpu_offload = cpu_offload
-        self.multi_gpu = multi_gpu or (torch.cuda.is_available() and torch.cuda.device_count() > 1)
         self.student_extract_layers = self.student_config.extract_layers
 
         cfg = self.student_config
@@ -62,7 +60,7 @@ class Flux2TinyPipeline:
             lora_path = cfg.get_lora_path("final/transformer_lora")
 
         print(f"=== Loading flux2tiny ({cfg.name}) ===")
-        print(f"  Dtype: {self.dtype} | Multi-GPU: {self.multi_gpu}")
+        print(f"  Dtype: {self.dtype}")
 
         self._load_text_encoder(student_model_id)
         self._load_adapter(adapter_path, adapter_type)
@@ -109,8 +107,6 @@ class Flux2TinyPipeline:
         vae = AutoencoderKLFlux2.from_pretrained(vae_id, torch_dtype=self.dtype)
 
         kwargs = {"vae": vae, "text_encoder": None, "tokenizer": None, "torch_dtype": self.dtype}
-        if self.multi_gpu:
-            kwargs["device_map"] = "balanced"
 
         self.pipe = Flux2KleinPipeline.from_pretrained(flux_id, **kwargs)
 
@@ -119,7 +115,7 @@ class Flux2TinyPipeline:
             print(f"  LoRA: {lora_path}")
             self.pipe.transformer = PeftModel.from_pretrained(self.pipe.transformer, lora_path)
 
-        if self.cpu_offload and not self.multi_gpu:
+        if self.cpu_offload:
             self.pipe.enable_model_cpu_offload()
 
     def encode_prompt(self, prompt: Union[str, list[str]], max_length: int = 128) -> torch.Tensor:

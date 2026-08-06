@@ -68,7 +68,6 @@ def main():
         adapter_type=args.adapter_type,
         dtype=dtype,
         cpu_offload=not args.no_cpu_offload,
-        multi_gpu=args.multi_gpu,
     )
 
     start = time.time()
