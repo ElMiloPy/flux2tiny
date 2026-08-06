@@ -6,7 +6,6 @@ using Flow Matching Loss on teacher latents (from Stage 2) or real images.
 
 Usage:
   python train_lora.py --config configs/minicpm5-1b.json --synthetic-dir synthetic_sd_15k
-  accelerate launch --multi_gpu train_lora.py --config configs/lfm2.5-230m.json --synthetic-dir synthetic_sd_15k
 """
 
 import argparse

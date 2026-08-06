@@ -26,47 +26,22 @@ from config import get_default_dtype
 # ---------------------------------------------------------------------------
 # Prompt generation
 # ---------------------------------------------------------------------------
-FALLBACK_TEMPLATES = [
-    "A photo of a cute {animal} sitting in a {setting}, high detail, 4k",
-    "A vibrant watercolor painting of a {setting} during {time}",
-    "An oil painting of a {subject} with cinematic lighting, masterwork",
-    "A sleek futuristic {object} in a glowing neon city at night",
-    "A macro photograph of a {subject} with soft bokeh background",
-]
-ANIMALS = ["cat", "dog", "fox", "owl", "panda", "tiger", "rabbit", "lion", "koala", "penguin"]
-SETTINGS = ["cozy living room", "lush green garden", "sunlit meadow", "snowy mountain", "misty forest", "sandy beach"]
-TIMES = ["sunset", "sunrise", "starry night", "golden hour", "foggy morning"]
-OBJECTS = ["sports car", "robot", "spaceship", "clockwork watch", "cyberpunk motorcycle"]
-SUBJECTS = ["blooming flower", "dewdrop on a leaf", "butterfly", "crystal prism", "cup of steaming coffee"]
-
-
-def fetch_prompts(count: int, dataset_name: str) -> list[str]:
-    """Fetch prompts from HF dataset, filling remainder with random templates."""
-    prompts = []
-    random.seed(42)
-
+def fetch_prompts(count: int, dataset_name: str = "Gustavosta/Stable-Diffusion-Prompts") -> list[str]:
+    """Fetch prompts from Hugging Face dataset (obligatory: Gustavosta/Stable-Diffusion-Prompts)."""
+    print(f"Loading prompts from Hugging Face dataset '{dataset_name}'...")
     try:
-        print(f"Fetching prompts from {dataset_name}...")
         ds = load_dataset(dataset_name, split="train")
+        prompts = []
         for item in ds:
             p = item.get("Prompt", item.get("text", item.get("prompt", "")))
             if isinstance(p, str) and len(p.strip()) > 5:
                 prompts.append(p.strip())
             if len(prompts) >= count:
                 break
-        print(f"Loaded {len(prompts)} prompts")
+        print(f"Successfully loaded {len(prompts)} prompts from '{dataset_name}'")
+        return prompts[:count]
     except Exception as e:
-        print(f"Could not load '{dataset_name}': {e}")
-
-    while len(prompts) < count:
-        tmpl = random.choice(FALLBACK_TEMPLATES)
-        prompts.append(tmpl.format(
-            animal=random.choice(ANIMALS), setting=random.choice(SETTINGS),
-            time=random.choice(TIMES), object=random.choice(OBJECTS),
-            subject=random.choice(SUBJECTS),
-        ))
-
-    return prompts[:count]
+        raise RuntimeError(f"Obligatory prompt dataset '{dataset_name}' failed to load: {e}")
 
 
 # ---------------------------------------------------------------------------

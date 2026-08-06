@@ -4,7 +4,7 @@ flux2tiny — Inference pipeline.
 Wraps diffusers' Flux2KleinPipeline, replacing the Qwen3-4B text encoder
 with a student encoder + trained projection adapter.
 
-Supports multi-GPU inference and auto fp16/bf16 detection.
+Supports auto fp16/bf16 precision detection.
 """
 
 from pathlib import Path

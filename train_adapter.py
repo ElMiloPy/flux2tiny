@@ -8,9 +8,6 @@ Both encoders are frozen — only the lightweight adapter trains.
 
 Usage:
   python train_adapter.py --config configs/minicpm5-1b.json --num-epochs 5
-
-Multi-GPU (dual GTX 1080):
-  accelerate launch --multi_gpu train_adapter.py --config configs/lfm2.5-230m.json
 """
 
 import argparse
@@ -31,39 +28,31 @@ from config import get_student_config, add_config_argument, get_default_dtype
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
-SAMPLE_PROMPTS = [
-    "A photo of a dog sitting in a lush green garden",
-    "A futuristic city with flying cars at sunset",
-    "An oil painting of a cottage near a serene lake",
-    "A close-up portrait of a woman with red hair",
-    "A cute cat wearing a tiny wizard hat",
-    "A watercolor landscape of snow-capped mountains",
-    "A delicious slice of chocolate cake on a ceramic plate",
-    "A retro 80s arcade with neon lights",
-    "A majestic dragon perched atop a rocky peak",
-    "A cozy coffee shop interior on a rainy afternoon",
-    "A vibrant coral reef with colorful tropical fish",
-    "A vintage sports car driving along a coastal highway",
-    "An astronaut standing on the surface of Mars",
-    "A whimsical treehouse in an enchanted forest",
-    "A minimalist modern kitchen with marble countertops",
-    "A dramatic stormy sky over a wheat field",
-    "A robot reading a book in a dusty library",
-    "A plate of fresh sushi with ginger and wasabi",
-    "A mechanical pocket watch with visible gears",
-    "A quiet cobblestone street in a European village",
-]
+def fetch_default_prompts(count: int = 5000, dataset_name: str = "Gustavosta/Stable-Diffusion-Prompts") -> list[str]:
+    """Fetch prompts from Hugging Face dataset (obligatory: Gustavosta/Stable-Diffusion-Prompts)."""
+    print(f"Loading prompts from Hugging Face dataset '{dataset_name}'...")
+    from datasets import load_dataset
+    try:
+        ds = load_dataset(dataset_name, split="train")
+        prompts = []
+        for item in ds:
+            p = item.get("Prompt", item.get("text", item.get("prompt", "")))
+            if isinstance(p, str) and len(p.strip()) > 5:
+                prompts.append(p.strip())
+            if len(prompts) >= count:
+                break
+        print(f"Successfully loaded {len(prompts)} prompts from '{dataset_name}'")
+        return prompts[:count]
+    except Exception as e:
+        raise RuntimeError(f"Obligatory prompt dataset '{dataset_name}' failed to load: {e}")
 
 
 class CaptionDataset(Dataset):
-    def __init__(self, captions: list[str] | None = None, num_samples: int = 5000):
+    def __init__(self, captions: list[str] | None = None, num_samples: int = 5000, dataset_name: str = "Gustavosta/Stable-Diffusion-Prompts"):
         if captions:
             self.captions = captions
         else:
-            self.captions = [
-                f"{SAMPLE_PROMPTS[i % len(SAMPLE_PROMPTS)]} (variant {i // len(SAMPLE_PROMPTS)})"
-                for i in range(num_samples)
-            ]
+            self.captions = fetch_default_prompts(count=num_samples, dataset_name=dataset_name)
 
     def __len__(self):
         return len(self.captions)
