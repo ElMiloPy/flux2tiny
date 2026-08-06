@@ -127,7 +127,7 @@ def train(config: dict):
         teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
 
     teacher_model = AutoModelForCausalLM.from_pretrained(
-        config["teacher_model"], torch_dtype=dtype,
+        config["teacher_model"], dtype=dtype,
         device_map=teacher_device, trust_remote_code=True,
     )
     teacher_model.eval()
@@ -143,7 +143,7 @@ def train(config: dict):
         student_tokenizer.pad_token = student_tokenizer.eos_token
 
     student_model = AutoModelForCausalLM.from_pretrained(
-        config["student_model"], torch_dtype=dtype,
+        config["student_model"], dtype=dtype,
         device_map=device, trust_remote_code=True,
     )
     student_model.eval()

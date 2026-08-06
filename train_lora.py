@@ -175,7 +175,7 @@ def train_lora(
         tokenizer.pad_token = tokenizer.eos_token
 
     text_encoder = AutoModelForCausalLM.from_pretrained(
-        student_model_id, torch_dtype=dtype, trust_remote_code=True
+        student_model_id, dtype=dtype, trust_remote_code=True
     ).to(device)
     text_encoder.eval()
     for p in text_encoder.parameters():

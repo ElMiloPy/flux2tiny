@@ -79,7 +79,7 @@ class Flux2TinyPipeline:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         self.text_encoder = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=self.dtype, trust_remote_code=True,
+            model_id, dtype=self.dtype, trust_remote_code=True,
         )
         self.text_encoder.eval()
         for p in self.text_encoder.parameters():
