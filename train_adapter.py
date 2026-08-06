@@ -293,7 +293,7 @@ def train(config: dict):
 # CLI
 # ---------------------------------------------------------------------------
 DEFAULTS = {
-    "teacher_model": "Qwen/Qwen3-4B",
+    "teacher_model": "unsloth/Qwen3-4B-unsloth-bnb-4bit",
     "teacher_hidden_size": 2560,
     "teacher_extract_layers": [8, 18, 28],
     "num_extract_layers": 3,
