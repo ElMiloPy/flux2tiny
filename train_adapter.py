@@ -284,7 +284,9 @@ def train(config: dict):
 
             # Forward + backward
             output = adapter(student_hidden)
-            loss = loss_fn(output, teacher_target)
+            mse_loss = loss_fn(output, teacher_target)
+            cos_loss = 1.0 - torch.nn.functional.cosine_similarity(output, teacher_target, dim=-1).mean()
+            loss = mse_loss + 0.1 * cos_loss
 
             optimizer.zero_grad()
             accelerator.backward(loss)

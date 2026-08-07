@@ -20,13 +20,18 @@ from safetensors.torch import save_file, load_file
 
 
 class PerLayerProjection(nn.Module):
-    """Projects each extracted hidden-state layer independently, then concatenates."""
+    """Projects each extracted hidden-state layer with LayerNorm + 2-layer MLP (SiLU), then concatenates."""
 
     def __init__(self, source_dim: int, target_dim_per_layer: int = 2560, num_layers: int = 3, bias: bool = True):
         super().__init__()
         self.num_layers = num_layers
         self.projections = nn.ModuleList([
-            nn.Linear(source_dim, target_dim_per_layer, bias=bias)
+            nn.Sequential(
+                nn.LayerNorm(source_dim),
+                nn.Linear(source_dim, target_dim_per_layer, bias=bias),
+                nn.SiLU(),
+                nn.Linear(target_dim_per_layer, target_dim_per_layer, bias=bias),
+            )
             for _ in range(num_layers)
         ])
 
