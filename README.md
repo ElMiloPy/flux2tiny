@@ -47,10 +47,10 @@ python train_adapter.py --config configs/minicpm5-1b.json --num-epochs 5
 
 ### Stage 3 — Flow Matching LoRA Distillation
 
-Joint training of adapter + FLUX.2 Transformer LoRA on teacher latents:
+Joint training of adapter + FLUX.2 Transformer LoRA on teacher latents (with automatic student embedding pre-caching, multi-worker DataLoader, and gradient accumulation):
 
 ```bash
-python train_lora.py --config configs/minicpm5-1b.json --synthetic-dir synthetic_sd_15k --num-epochs 3
+python train_lora.py --config configs/minicpm5-1b.json --synthetic-dir synthetic_sd_15k --batch-size 4 --num-workers 4 --num-epochs 3
 ```
 
 ---
