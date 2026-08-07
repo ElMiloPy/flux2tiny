@@ -190,7 +190,7 @@ def train(config: dict):
             target_dim_per_layer=config["teacher_hidden_size"],
             num_layers=config["num_extract_layers"],
         )
-    adapter = adapter.to(device=device, dtype=dtype)
+    adapter = adapter.to(device=device, dtype=torch.float32)
 
     if accelerator.is_main_process:
         print(f"Adapter: {adapter.total_params:,} params")
@@ -257,7 +257,7 @@ def train(config: dict):
 
             if use_precomputed:
                 batch_texts, teacher_target = batch
-                teacher_target = teacher_target.to(device=device, dtype=dtype)
+                teacher_target = teacher_target.to(device=device, dtype=torch.float32)
             else:
                 batch_texts = batch
                 teacher_hidden = extract_hidden_states(
@@ -266,7 +266,7 @@ def train(config: dict):
                     device=teacher_device, dtype=dtype,
                 )
                 teacher_target = torch.cat(
-                    [h.to(device=device, dtype=dtype) for h in teacher_hidden], dim=-1
+                    [h.to(device=device, dtype=torch.float32) for h in teacher_hidden], dim=-1
                 )
 
             # Student forward
@@ -275,7 +275,7 @@ def train(config: dict):
                 config["student_extract_layers"], config["max_seq_len"],
                 device=device, dtype=dtype,
             )
-            student_hidden = [h.to(device=device, dtype=dtype) for h in student_hidden]
+            student_hidden = [h.to(device=device, dtype=torch.float32) for h in student_hidden]
 
             # Align sequence lengths (different tokenizers)
             min_seq = min(teacher_target.shape[1], student_hidden[0].shape[1])
