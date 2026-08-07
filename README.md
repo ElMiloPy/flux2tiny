@@ -27,7 +27,7 @@ Configs live in `configs/*.json`. All scripts accept `--config configs/<name>.js
 
 ### Stage 1 — Teacher Latent & Embedding Generation
 
-Generate synthetic latent-prompt pairs **alongside 1-to-1 precomputed teacher text embeddings** from the original FLUX.2 pipeline:
+Generate synthetic latent-prompt pairs along with precomputed teacher embeddings from the original FLUX.2 pipeline:
 
 ```bash
 python generate_synthetic_dataset.py --num-samples 15000 --output-dir synthetic_sd_15k
@@ -35,16 +35,13 @@ python generate_synthetic_dataset.py --num-samples 15000 --output-dir synthetic_
 
 ### Stage 2 — Adapter Pre-training
 
-Train a lightweight projection adapter to align student hidden states with precomputed teacher hidden states via MSE loss.
+Train a lightweight projection adapter using precomputed teacher embeddings from the synthetic dataset (fast & low VRAM), or live teacher extraction:
 
-**Fast mode (using precomputed embeddings dataset):**
 ```bash
+# Recommended: Train from precomputed embeds dataset
 python train_adapter.py --config configs/minicpm5-1b.json --dataset-dir synthetic_sd_15k --num-epochs 5
-```
-*Note: Using `--dataset-dir` skips loading the heavy Qwen3-4B teacher model entirely during adapter training, providing >400 it/s throughput and requiring only ~2.5 GB VRAM.*
 
-**Live mode (extracting teacher hidden states on-the-fly):**
-```bash
+# Alternative: Live teacher extraction
 python train_adapter.py --config configs/minicpm5-1b.json --num-epochs 5
 ```
 
@@ -110,8 +107,8 @@ flux2tiny/
 ├── pipeline.py                       # Inference pipeline
 ├── generate.py                       # CLI image generation
 ├── compare.py                        # Side-by-side benchmark
-├── generate_synthetic_dataset.py     # Stage 1: Teacher latent & embedding generation
-├── train_adapter.py                  # Stage 2: Adapter pre-training
+├── train_adapter.py                  # Stage 1: Adapter pre-training
+├── generate_synthetic_dataset.py     # Stage 2: Teacher latent generation
 ├── train_lora.py                     # Stage 3: LoRA distillation
 ├── upload_to_hub.py                  # HuggingFace Hub upload
 ├── setup_env.sh                      # Conda environment setup
@@ -126,9 +123,8 @@ flux2tiny/
 
 | Stage | Script | Peak VRAM |
 |:------|:-------|:----------|
-| 1. Synthetic Dataset | `generate_synthetic_dataset.py` | ~12 GB |
-| 2. Adapter (Precomputed) | `train_adapter.py --dataset-dir ...` | ~2.5 GB |
-| 2. Adapter (Live Teacher) | `train_adapter.py` | ~12 GB (or ~2.5 GB with `unsloth/Qwen3-4B-bnb-4bit`) |
+| 1. Latents & Embeds | `generate_synthetic_dataset.py` | ~12 GB |
+| 2. Adapter | `train_adapter.py` | ~2.5 GB (with `--dataset-dir`) or ~12 GB (live teacher) |
 | 3. LoRA | `train_lora.py` | ~10 GB |
 | Inference | `generate.py` | ~4 GB (with CPU offload) |
 
@@ -137,4 +133,3 @@ flux2tiny/
 ## License
 
 Source code released under the [MIT License](LICENSE).
-
