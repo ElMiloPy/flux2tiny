@@ -33,6 +33,7 @@ from config import get_student_config, add_config_argument, StudentConfig, get_d
 # ---------------------------------------------------------------------------
 def precache_student_embeddings(
     synthetic_dir: Path,
+    preset_name: str,
     student_model_id: str,
     student_extract_layers: list[int],
     device: torch.device,
@@ -40,8 +41,7 @@ def precache_student_embeddings(
     max_seq_len: int = 128,
 ):
     """Pre-compute and save student hidden states to disk for zero-overhead training."""
-    safe_name = student_model_id.replace("/", "_")
-    cache_dir = synthetic_dir / f"student_embeds_{safe_name}"
+    cache_dir = synthetic_dir / preset_name
     manifest_file = synthetic_dir / "manifest.json"
     if not manifest_file.exists():
         return None
@@ -50,14 +50,15 @@ def precache_student_embeddings(
         manifest = json.load(f)
 
     all_exist = cache_dir.exists() and all(
-        (cache_dir / f"student_embed_{item['id']:06d}.pt").exists() for item in manifest
+        (cache_dir / f"embed_{item['id']:06d}.pt").exists() or (cache_dir / f"student_embed_{item['id']:06d}.pt").exists()
+        for item in manifest
     )
     if all_exist:
         print(f"--> Found pre-cached student embeddings in {cache_dir.name}")
         return cache_dir
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\n=== Pre-caching student embeddings for {student_model_id} ===")
+    print(f"\n=== Pre-caching student embeddings for {preset_name} ({student_model_id}) ===")
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(student_model_id, trust_remote_code=True)
@@ -70,9 +71,9 @@ def precache_student_embeddings(
     text_encoder.eval()
 
     with torch.no_grad():
-        for item in tqdm(manifest, desc="Pre-caching student embeds"):
+        for item in tqdm(manifest, desc=f"Pre-caching {preset_name} embeds"):
             idx = item["id"]
-            save_path = cache_dir / f"student_embed_{idx:06d}.pt"
+            save_path = cache_dir / f"embed_{idx:06d}.pt"
             if save_path.exists():
                 continue
             prompt = item["prompt"]
@@ -156,7 +157,9 @@ class ImageCaptionDataset(Dataset):
             latent = torch.load(self.synthetic_dir / item["latent_file"], map_location="cpu", weights_only=True)
             sample = {"latent": latent, "caption": item["prompt"]}
             if self.student_embeds_dir:
-                embed_path = self.student_embeds_dir / f"student_embed_{item['id']:06d}.pt"
+                embed_path = self.student_embeds_dir / f"embed_{item['id']:06d}.pt"
+                if not embed_path.exists():
+                    embed_path = self.student_embeds_dir / f"student_embed_{item['id']:06d}.pt"
                 if embed_path.exists():
                     student_hidden = torch.load(embed_path, map_location="cpu", weights_only=True)
                     sample["student_hidden"] = student_hidden
@@ -247,19 +250,19 @@ def train_lora(
         print(f"  Device: {device} | Dtype: {dtype} | Processes: {accelerator.num_processes}")
         print(f"  Image: {img_size}x{img_size} | LoRA rank: {lora_rank} | Batch size: {batch_size} (Accum: {gradient_accumulation_steps})")
 
-    # 1. Check pre-cached student embeddings
+    # 1. Check pre-cached student embeddings (folder named by preset_name e.g. smollm2-135m)
     student_embeds_dir = None
     if synthetic_dir and Path(synthetic_dir).exists():
         if accelerator.is_main_process:
             student_embeds_dir = precache_student_embeddings(
                 synthetic_dir=Path(synthetic_dir),
+                preset_name=student_cfg.name,
                 student_model_id=student_model_id,
                 student_extract_layers=student_extract_layers,
                 device=device, dtype=dtype,
             )
         accelerator.wait_for_everyone()
-        safe_name = student_model_id.replace("/", "_")
-        student_embeds_dir = Path(synthetic_dir) / f"student_embeds_{safe_name}"
+        student_embeds_dir = Path(synthetic_dir) / student_cfg.name
 
     use_precached_embeds = student_embeds_dir and student_embeds_dir.exists()
     text_encoder, tokenizer = None, None
@@ -330,7 +333,7 @@ def train_lora(
     dataset = ImageCaptionDataset(
         image_dir=image_dir, hf_dataset=hf_dataset,
         synthetic_dir=synthetic_dir, student_embeds_dir=student_embeds_dir,
-        img_size=img_size, num_samples=200,
+        img_size=img_size,
     )
     dataloader = DataLoader(
         dataset, batch_size=batch_size, shuffle=True,
