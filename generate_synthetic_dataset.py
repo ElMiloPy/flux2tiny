@@ -58,13 +58,15 @@ def generate_synthetic_latents(
     flux_model_id: str = "black-forest-labs/FLUX.2-klein-4B",
     vae_model_id: str = "black-forest-labs/FLUX.2-small-decoder",
     fp16: bool = False,
+    max_seq_len: int = 128,
+    teacher_extract_layers: tuple = (8, 18, 28),
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.float16 if fp16 else get_default_dtype()
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    print("=== Generating Synthetic Teacher Latents ===")
+    print("=== Generating Synthetic Teacher Latents & Embeddings ===")
     print(f"  Model: {flux_model_id} | Dtype: {dtype}")
     print(f"  Samples: {num_samples} | Resolution: {img_size}x{img_size} | Steps: {steps}")
 
@@ -88,20 +90,36 @@ def generate_synthetic_latents(
                 generator=generator, output_type="latent",
             ).images[0]
 
-        filename = f"latent_{idx:06d}.pt"
-        torch.save(latents.cpu(), output_path / filename)
-        manifest.append({"id": idx, "prompt": prompt, "latent_file": filename, "seed": seed_start + idx})
+            inputs = pipe.tokenizer(
+                prompt, return_tensors="pt", padding="max_length",
+                truncation=True, max_length=max_seq_len,
+            ).to(device)
+            outputs = pipe.text_encoder(**inputs, output_hidden_states=True, return_dict=True)
+            teacher_hidden = [outputs.hidden_states[i + 1] for i in teacher_extract_layers]
+            embeds = torch.cat(teacher_hidden, dim=-1)
+
+        latent_filename = f"latent_{idx:06d}.pt"
+        embed_filename = f"embed_{idx:06d}.pt"
+        torch.save(latents.cpu(), output_path / latent_filename)
+        torch.save(embeds.cpu(), output_path / embed_filename)
+        manifest.append({
+            "id": idx,
+            "prompt": prompt,
+            "latent_file": latent_filename,
+            "embed_file": embed_filename,
+            "seed": seed_start + idx,
+        })
 
         if (idx + 1) % 100 == 0 or (idx + 1) == num_samples:
             with open(output_path / "manifest.json", "w") as f:
                 json.dump(manifest, f, indent=2)
 
     elapsed = time.time() - start_time
-    print(f"\n=== Done: {num_samples} latents in {elapsed/60:.1f} min ({elapsed/num_samples:.2f} s/sample) ===")
+    print(f"\n=== Done: {num_samples} latents & embeds in {elapsed/60:.1f} min ({elapsed/num_samples:.2f} s/sample) ===")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate synthetic teacher latents (Stage 2)")
+    parser = argparse.ArgumentParser(description="Generate synthetic teacher latents and embeddings (Stage 2)")
     parser.add_argument("--output-dir", type=str, default="synthetic_dataset")
     parser.add_argument("--prompt-dataset", type=str, default="Gustavosta/Stable-Diffusion-Prompts")
     parser.add_argument("--num-samples", type=int, default=1000)
@@ -109,6 +127,7 @@ if __name__ == "__main__":
     parser.add_argument("--img-size", type=int, default=512)
     parser.add_argument("--flux-model", type=str, default="black-forest-labs/FLUX.2-klein-4B")
     parser.add_argument("--vae-model", type=str, default="black-forest-labs/FLUX.2-small-decoder")
+    parser.add_argument("--max-seq-len", type=int, default=128)
     parser.add_argument("--fp16", action="store_true", help="Force float16 (for Pascal GPUs)")
     args = parser.parse_args()
 
@@ -121,4 +140,6 @@ if __name__ == "__main__":
         flux_model_id=args.flux_model,
         vae_model_id=args.vae_model,
         fp16=args.fp16,
+        max_seq_len=args.max_seq_len,
     )
+

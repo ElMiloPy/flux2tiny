@@ -61,6 +61,26 @@ class CaptionDataset(Dataset):
         return self.captions[idx]
 
 
+class PrecomputedAdapterDataset(Dataset):
+    def __init__(self, dataset_dir: str | Path):
+        self.dataset_dir = Path(dataset_dir)
+        manifest_path = self.dataset_dir / "manifest.json"
+        with open(manifest_path, "r") as f:
+            self.items = json.load(f)
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx):
+        item = self.items[idx]
+        prompt = item["prompt"]
+        embed_path = self.dataset_dir / item["embed_file"]
+        embed = torch.load(embed_path, map_location="cpu", weights_only=True)
+        if embed.dim() == 3 and embed.shape[0] == 1:
+            embed = embed.squeeze(0)
+        return prompt, embed
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -102,26 +122,44 @@ def train(config: dict):
         print(f"Device: {device} | Dtype: {dtype} | Processes: {accelerator.num_processes}")
         print(f"Output: {output_dir}")
 
-    # --- Load teacher (frozen) ---
+    # --- Check for precomputed dataset ---
+    dataset_dir = config.get("dataset_dir")
+    use_precomputed = False
+    if dataset_dir and Path(dataset_dir).exists():
+        manifest_p = Path(dataset_dir) / "manifest.json"
+        if manifest_p.exists():
+            with open(manifest_p) as f:
+                manifest_data = json.load(f)
+                if manifest_data and "embed_file" in manifest_data[0]:
+                    use_precomputed = True
+
+    # --- Load teacher (frozen, if not using precomputed embeds) ---
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    if accelerator.is_main_process:
-        print(f"\nLoading teacher: {config['teacher_model']}...")
+    if use_precomputed:
+        if accelerator.is_main_process:
+            print(f"\nUsing precomputed teacher embeddings from dataset: {dataset_dir}")
+        teacher_model = None
+        teacher_tokenizer = None
+        teacher_device = None
+    else:
+        if accelerator.is_main_process:
+            print(f"\nLoading teacher: {config['teacher_model']}...")
 
-    teacher_on_cpu = config.get("teacher_on_cpu", False)
-    teacher_device = "cpu" if teacher_on_cpu else device
+        teacher_on_cpu = config.get("teacher_on_cpu", False)
+        teacher_device = "cpu" if teacher_on_cpu else device
 
-    teacher_tokenizer = AutoTokenizer.from_pretrained(config["teacher_model"], trust_remote_code=True)
-    if teacher_tokenizer.pad_token is None:
-        teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
+        teacher_tokenizer = AutoTokenizer.from_pretrained(config["teacher_model"], trust_remote_code=True)
+        if teacher_tokenizer.pad_token is None:
+            teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
 
-    teacher_model = AutoModelForCausalLM.from_pretrained(
-        config["teacher_model"], dtype=dtype,
-        device_map=teacher_device, trust_remote_code=True,
-    )
-    teacher_model.eval()
-    for p in teacher_model.parameters():
-        p.requires_grad = False
+        teacher_model = AutoModelForCausalLM.from_pretrained(
+            config["teacher_model"], dtype=dtype,
+            device_map=teacher_device, trust_remote_code=True,
+        )
+        teacher_model.eval()
+        for p in teacher_model.parameters():
+            p.requires_grad = False
 
     # --- Load student (frozen) ---
     if accelerator.is_main_process:
@@ -158,13 +196,17 @@ def train(config: dict):
         print(f"Adapter: {adapter.total_params:,} params")
 
     # --- Data ---
-    captions = None
-    if config.get("captions_file") and Path(config["captions_file"]).exists():
-        captions = Path(config["captions_file"]).read_text().strip().splitlines()
-        if accelerator.is_main_process:
-            print(f"Loaded {len(captions)} captions from {config['captions_file']}")
+    if use_precomputed:
+        dataset = PrecomputedAdapterDataset(dataset_dir)
+    else:
+        captions = None
+        if config.get("captions_file") and Path(config["captions_file"]).exists():
+            captions = Path(config["captions_file"]).read_text().strip().splitlines()
+            if accelerator.is_main_process:
+                print(f"Loaded {len(captions)} captions from {config['captions_file']}")
 
-    dataset = CaptionDataset(captions=captions, num_samples=config["num_train_samples"])
+        dataset = CaptionDataset(captions=captions, num_samples=config["num_train_samples"])
+
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True)
 
     # --- Optimizer ---
@@ -180,7 +222,7 @@ def train(config: dict):
     save_every = config.get("save_every", 500)
 
     if accelerator.is_main_process:
-        print(f"Dataset: {len(dataset)} captions | Steps: {total_steps}\n")
+        print(f"Dataset: {len(dataset)} items | Steps: {total_steps}\n")
 
     # --- Auto-resume from latest checkpoint ---
     start_step = 0
@@ -204,7 +246,7 @@ def train(config: dict):
         pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{config['num_epochs']}",
                     disable=not accelerator.is_main_process)
 
-        for batch_texts in pbar:
+        for batch in pbar:
             if global_step < start_step:
                 global_step += 1
                 continue
@@ -213,15 +255,19 @@ def train(config: dict):
             for pg in optimizer.param_groups:
                 pg["lr"] = lr
 
-            # Teacher forward
-            teacher_hidden = extract_hidden_states(
-                teacher_model, teacher_tokenizer, list(batch_texts),
-                config["teacher_extract_layers"], config["max_seq_len"],
-                device=teacher_device, dtype=dtype,
-            )
-            teacher_target = torch.cat(
-                [h.to(device=device, dtype=torch.float32) for h in teacher_hidden], dim=-1
-            )
+            if use_precomputed:
+                batch_texts, teacher_target = batch
+                teacher_target = teacher_target.to(device=device, dtype=torch.float32)
+            else:
+                batch_texts = batch
+                teacher_hidden = extract_hidden_states(
+                    teacher_model, teacher_tokenizer, list(batch_texts),
+                    config["teacher_extract_layers"], config["max_seq_len"],
+                    device=teacher_device, dtype=dtype,
+                )
+                teacher_target = torch.cat(
+                    [h.to(device=device, dtype=torch.float32) for h in teacher_hidden], dim=-1
+                )
 
             # Student forward
             student_hidden = extract_hidden_states(
@@ -304,6 +350,7 @@ if __name__ == "__main__":
     parser.add_argument("--teacher-model", type=str, default=DEFAULTS["teacher_model"])
     parser.add_argument("--student-model", type=str, default=None)
     parser.add_argument("--adapter-type", type=str, default="per_layer", choices=["per_layer", "concat"])
+    parser.add_argument("--dataset-dir", type=str, default=None, help="Synthetic dataset dir with precomputed embeds")
     parser.add_argument("--batch-size", type=int, default=DEFAULTS["batch_size"])
     parser.add_argument("--num-epochs", type=int, default=DEFAULTS["num_epochs"])
     parser.add_argument("--learning-rate", type=float, default=DEFAULTS["learning_rate"])
@@ -325,6 +372,7 @@ if __name__ == "__main__":
         "student_hidden_size": student_cfg.hidden_size,
         "student_extract_layers": student_cfg.extract_layers,
         "adapter_type": args.adapter_type,
+        "dataset_dir": args.dataset_dir,
         "batch_size": args.batch_size,
         "num_epochs": args.num_epochs,
         "learning_rate": args.learning_rate,
@@ -338,3 +386,4 @@ if __name__ == "__main__":
     })
 
     train(config)
+
