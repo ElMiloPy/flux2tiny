@@ -19,19 +19,32 @@ from pathlib import Path
 from safetensors.torch import save_file, load_file
 
 
+class SwiGLUBlock(nn.Module):
+    """LayerNorm + SwiGLU MLP projection with direct linear residual connection."""
+
+    def __init__(self, source_dim: int, target_dim: int = 2560, bias: bool = True):
+        super().__init__()
+        self.norm = nn.LayerNorm(source_dim)
+        self.direct = nn.Linear(source_dim, target_dim, bias=bias)
+        self.gate = nn.Linear(source_dim, target_dim, bias=bias)
+        self.up = nn.Linear(source_dim, target_dim, bias=bias)
+        self.down = nn.Linear(target_dim, target_dim, bias=bias)
+        self.gamma = nn.Parameter(torch.tensor(0.1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.norm(x)
+        swiglu = self.down(nn.functional.silu(self.gate(h)) * self.up(h))
+        return self.direct(x) + self.gamma * swiglu
+
+
 class PerLayerProjection(nn.Module):
-    """Projects each extracted hidden-state layer with LayerNorm + 2-layer MLP (SiLU), then concatenates."""
+    """Projects each extracted layer with LayerNorm + SwiGLU + Residual connection, then concatenates."""
 
     def __init__(self, source_dim: int, target_dim_per_layer: int = 2560, num_layers: int = 3, bias: bool = True):
         super().__init__()
         self.num_layers = num_layers
         self.projections = nn.ModuleList([
-            nn.Sequential(
-                nn.LayerNorm(source_dim),
-                nn.Linear(source_dim, target_dim_per_layer, bias=bias),
-                nn.SiLU(),
-                nn.Linear(target_dim_per_layer, target_dim_per_layer, bias=bias),
-            )
+            SwiGLUBlock(source_dim, target_dim_per_layer, bias=bias)
             for _ in range(num_layers)
         ])
 
